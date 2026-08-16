@@ -329,6 +329,10 @@ export function buildTurns(events: TraceEvent[]): TrajectoryTurnModel[] {
           isError: false,
           running: true,
           model: String(callData.model ?? "unknown"),
+          provider:
+            typeof callData.provider === "string" && callData.provider
+              ? callData.provider
+              : undefined,
           options,
         };
         appendCell(event.run_id, cell);

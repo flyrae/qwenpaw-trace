@@ -21,6 +21,7 @@ export interface UsageInfo {
   time?: number;
   cache_creation_input_tokens?: number;
   cache_input_tokens?: number;
+  reasoning_tokens?: number;
 }
 
 export interface TimingInfo {
@@ -43,6 +44,7 @@ export interface TrajectoryRecord {
   messages?: MessageDigest[];
   /* assistant */
   model?: string;
+  provider?: string;
   outputText?: string;
   thinkingText?: string;
   usage?: UsageInfo;

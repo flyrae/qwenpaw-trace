@@ -12,22 +12,6 @@ table, and a record inspector.
 > [DESIGN.md](./DESIGN.md)（Full architecture, event model, API,
 > limitations, and history: see [DESIGN.md](./DESIGN.md)).
 
-## Screenshots
-
-![Trajectory overview: stats strip, three-lane timeline, request-grouped ledger](docs/images/overview.png)
-
-![Record inspector: click any row for Summary / Payload / Result / Timing / Usage / Raw](docs/images/inspector.png)
-
-## Installation
-
-```bash
-qwenpaw plugin install https://github.com/flyrae/qwenpaw-trace/releases/download/v0.1.0/agent-trace-0.1.0.zip
-```
-
-Compatible with QwenPaw 2.1.0–2.2.0. After installing (or updating),
-hard-refresh the Console (Ctrl+Shift+R); backend changes additionally
-need a QwenPaw restart.
-
 ## Attribution
 
 The timeline projection algorithm (`frontend/src/trajectory/timeline.ts`),
@@ -160,8 +144,10 @@ qwenpaw plugin install plugins/bundle/agent-trace --force
 # then hard-refresh the Console (Ctrl+Shift+R)
 ```
 
-Any backend change (`agent_trace/` or `plugin.py`) additionally needs a
-**QwenPaw restart** after the `--force` install: the host's hot
-reinstall does not remove old hooks from workspace registries, so
-capture stays disconnected until the cold-start path re-registers
-everything (API and frontend changes do take effect immediately).
+No restart needed: since the host fix that fires `workspace_created`
+hooks after workspace instance replacement, `--force` reinstalls
+re-attach the plugin's runtime hooks onto the fresh instances
+(verified: hot reinstall → new conversation → capture intact; the
+log shows `agent-trace: runtime hooks attached to workspace ...`).
+On hosts without that fix, backend changes still require a restart
+to restore capture.

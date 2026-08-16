@@ -70,6 +70,15 @@ async def _on_uninstall(plugin_id: str, delete_files: bool) -> None:
         )
 
 
+def _on_workspace_attached(workspace_info: dict) -> None:
+    """Log hook attachment (hot-reload verification signal)."""
+    logger.info(
+        "agent-trace: runtime hooks attached to workspace %s (%s)",
+        workspace_info.get("agent_id", "?"),
+        workspace_info.get("workspace_dir", "?"),
+    )
+
+
 class AgentTracePlugin:
     """Plugin entry: hooks + middleware + REST router."""
 
@@ -116,6 +125,11 @@ class AgentTracePlugin:
         api.register_uninstall_hook(
             "agent_trace_uninstall",
             _on_uninstall,
+        )
+        api.register_workspace_created_hook(
+            "agent_trace_ws_attached",
+            _on_workspace_attached,
+            priority=65,
         )
         logger.info("agent-trace: plugin registered")
 

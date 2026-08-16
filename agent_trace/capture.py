@@ -127,6 +127,39 @@ def _channel_meta_digest(request: Any) -> dict:
     return digest
 
 
+def _provider_name(agent: Any, input_kwargs: dict) -> str:
+    """Best-effort provider id for an ``on_model_call`` invocation.
+
+    The agent holds the outermost model wrapper (RetryChatModel →
+    TokenRecordingModelWrapper); ``_provider_id`` lives on the
+    recording wrapper, and ``model_key`` already renders
+    ``provider_id:model_name`` when present.
+    """
+    for candidate in (
+        input_kwargs.get("provider"),
+        getattr(agent, "model", None),
+        getattr(agent, "_model", None),
+    ):
+        if isinstance(candidate, str) and candidate:
+            return candidate
+        hops = 0
+        node = candidate
+        while node is not None and hops < 5:
+            key = getattr(node, "model_key", None)
+            if isinstance(key, str) and ":" in key:
+                return key.split(":", 1)[0]
+            provider = getattr(node, "_provider_id", None)
+            if isinstance(provider, str) and provider:
+                return provider
+            node = getattr(node, "_inner", None) or getattr(
+                node,
+                "_model",
+                None,
+            )
+            hops += 1
+    return ""
+
+
 def _model_name(agent: Any, input_kwargs: dict) -> str:
     """Best-effort model label for an ``on_model_call`` invocation."""
     for candidate in (
@@ -136,9 +169,12 @@ def _model_name(agent: Any, input_kwargs: dict) -> str:
     ):
         if isinstance(candidate, str) and candidate:
             return candidate
-        name = getattr(candidate, "model_name", None)
-        if isinstance(name, str) and name:
-            return name
+        # ChatModelBase exposes the name via ``model`` (and some
+        # wrappers via ``model_name``).
+        for attr in ("model_name", "model"):
+            name = getattr(candidate, attr, None)
+            if isinstance(name, str) and name:
+                return name
     return "unknown"
 
 
@@ -179,6 +215,34 @@ def _blocks_tool_calls(content: Any) -> list:
     return calls
 
 
+def _reasoning_tokens(usage: Any) -> Optional[int]:
+    """Best-effort reasoning-token extraction from usage metadata.
+
+    Providers nest it differently (OpenAI-style
+    ``completion_tokens_details.reasoning_tokens``); a couple of
+    defensive shapes are tried so cost analysis can split
+    reasoning vs content tokens (dsh UsageRows parity).
+    """
+    metadata = getattr(usage, "metadata", None)
+    if not isinstance(metadata, dict):
+        return None
+    candidates = [
+        metadata.get("reasoning_tokens"),
+    ]
+    for key in ("completion_tokens_details", "output_tokens_details"):
+        nested = metadata.get(key)
+        if isinstance(nested, dict):
+            candidates.append(nested.get("reasoning_tokens"))
+    for value in candidates:
+        if (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and value > 0
+        ):
+            return value
+    return None
+
+
 def _usage_dict(usage: Any) -> Optional[dict]:
     """Normalize a ChatUsage object (or plain dict) for persistence."""
     if usage is None:
@@ -213,6 +277,11 @@ def _usage_dict(usage: Any) -> Optional[dict]:
             and value
         ):
             extracted[key] = value
+    # ChatUsage subclasses dict (DictMixin) yet still carries .metadata —
+    # attempt the reasoning extraction regardless of the source path.
+    reasoning = _reasoning_tokens(usage)
+    if reasoning is not None:
+        extracted["reasoning_tokens"] = reasoning
     return extracted or None
 
 
@@ -785,11 +854,13 @@ class TraceMiddleware(MiddlewareBase):
             input_kwargs.get("tools"),
         )
         model_hint = _model_name(agent, input_kwargs)
+        provider_hint = _provider_name(agent, input_kwargs)
         _safe_append(
             run,
             ev.EVENT_LLM_CALL,
             {
                 "model": model_hint,
+                **({"provider": provider_hint} if provider_hint else {}),
                 "messages_count": len(messages),
                 "last_user_text": _last_user_text(messages),
                 "messages": _messages_digest(messages),

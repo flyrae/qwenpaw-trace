@@ -39,18 +39,22 @@ export interface RequestSummary {
   llmCalls: number;
   toolCalls: number;
   models: string[];
+  providers: string[];
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  reasoningTokens: number;
   ttftMs: number | null;
   decodeMs: number | null;
   errors: string[];
   options?: Record<string, unknown>;
+  resultIndex?: number;
   sessionTotals?: {
     inputTokens: number;
     outputTokens: number;
     totalTokens: number;
+    reasoningTokens: number;
   };
 }
 
@@ -184,12 +188,127 @@ export interface InspectorProps {
   record: TrajectoryRecord | null;
   request: RequestSummary | null;
   onJumpSession?: (sessionId: string) => void;
+  onJumpRecord?: (index: number) => void;
   onSelectTurn?: (turn: number) => void;
   onClose?: () => void;
 }
 
-function RequestInspector({ request }: { request: RequestSummary }) {
+/** dsh-style token breakdown rows (UsageRows parity). */
+function UsageBreakdown({
+  input,
+  output,
+  cacheRead,
+  cacheWrite,
+  reasoning,
+}: {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+}) {
+  const other = Math.max(0, input - cacheRead - cacheWrite);
+  const content = Math.max(0, output - reasoning);
+  return (
+    <div>
+      <KeyValue label="Input" value={`${formatTokens(input)} tok`} />
+      {cacheRead ? (
+        <KeyValue label="Cached" value={`${formatTokens(cacheRead)} tok`} />
+      ) : null}
+      {cacheWrite ? (
+        <KeyValue
+          label="Cache created"
+          value={`${formatTokens(cacheWrite)} tok`}
+        />
+      ) : null}
+      {cacheRead || cacheWrite ? (
+        <KeyValue label="Other" value={`${formatTokens(other)} tok`} />
+      ) : null}
+      <KeyValue label="Output" value={`${formatTokens(output)} tok`} />
+      {reasoning ? (
+        <KeyValue label="Reasoning" value={`${formatTokens(reasoning)} tok`} />
+      ) : null}
+      {reasoning ? (
+        <KeyValue label="Content" value={`${formatTokens(content)} tok`} />
+      ) : null}
+    </div>
+  );
+}
+
+/** Clickable section header that jumps to a sibling tab (dsh OverviewSection). */
+function OverviewSection({
+  label,
+  onOpen,
+  children,
+}: {
+  label: string;
+  onOpen: () => void;
+  children: ReactNS.ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        marginTop: 8,
+        borderTop: "1px solid rgba(128,128,128,0.15)",
+        paddingTop: 6,
+      }}
+    >
+      <a onClick={onOpen} style={{ fontSize: 12, fontWeight: 600 }}>
+        {label} →
+      </a>
+      <div style={{ paddingTop: 2 }}>{children}</div>
+    </div>
+  );
+}
+
+function RequestInspector({
+  request,
+  onJumpRecord,
+}: {
+  request: RequestSummary;
+  onJumpRecord?: (index: number) => void;
+}) {
   const locale = storedLocale();
+  const [tab, setTab] = React.useState("summary");
+  const timingRows = (
+    <div>
+      <KeyValue label="Started" value={formatEpochMs(request.startedAt)} />
+      <KeyValue
+        label="Total"
+        value={formatSeconds(
+          request.durationMs === null ? null : request.durationMs / 1000,
+        )}
+      />
+      {request.ttftMs !== null ? (
+        <KeyValue
+          label="First TTFT"
+          value={formatSeconds(request.ttftMs / 1000)}
+        />
+      ) : null}
+      {request.decodeMs !== null ? (
+        <KeyValue
+          label="Total decoding"
+          value={formatSeconds(request.decodeMs / 1000)}
+        />
+      ) : null}
+      <KeyValue
+        label={t(locale, "throughput")}
+        value={formatThroughput(
+          request.outputTokens,
+          request.decodeMs === null ? null : request.decodeMs / 1000,
+        )}
+      />
+    </div>
+  );
+  const usageRows = (
+    <UsageBreakdown
+      input={request.inputTokens}
+      output={request.outputTokens}
+      cacheRead={request.cacheReadTokens}
+      cacheWrite={request.cacheWriteTokens}
+      reasoning={request.reasoningTokens}
+    />
+  );
   const items: { key: string; label: string; children: ReactNS.ReactNode }[] = [
     {
       key: "summary",
@@ -200,34 +319,42 @@ function RequestInspector({ request }: { request: RequestSummary }) {
           <KeyValue
             label={t(locale, "status")}
             value={request.status || "unknown"}
+            danger={request.status === "error"}
           />
           <KeyValue label="Query" value={firstLineOf(request.query)} />
           <KeyValue
-            label={t(locale, "duration")}
-            value={formatSeconds(
-              request.durationMs === null ? null : request.durationMs / 1000,
-            )}
+            label={t(locale, "model")}
+            value={request.models.join(", ") || "-"}
           />
-          <KeyValue label="Started" value={formatEpochMs(request.startedAt)} />
-          <KeyValue
-            label={t(locale, "llmCalls")}
-            value={String(request.llmCalls)}
-          />
-          <KeyValue
-            label={t(locale, "toolCalls")}
-            value={String(request.toolCalls)}
-          />
-          {request.models.length > 0 ? (
+          <KeyValue label="Tool calls" value={String(request.toolCalls)} />
+          {request.errors.length > 0 ? (
             <KeyValue
-              label={t(locale, "model")}
-              value={request.models.join(", ")}
+              label="Error"
+              value={request.errors.join("; ").slice(0, 120)}
+              danger
             />
           ) : null}
-          {request.errors.length > 0 ? (
-            <Text type="danger" style={{ fontSize: 12 }}>
-              {request.errors.join("; ")}
-            </Text>
+          {request.resultIndex !== undefined && onJumpRecord ? (
+            <div style={{ padding: "3px 0", textAlign: "right" }}>
+              <a
+                style={{ fontSize: 12 }}
+                onClick={() => onJumpRecord(request.resultIndex as number)}
+              >
+                Result: Assistant Message →
+              </a>
+            </div>
           ) : null}
+          {request.options ? (
+            <OverviewSection label="Options" onOpen={() => setTab("options")}>
+              <Pre value={request.options} json />
+            </OverviewSection>
+          ) : null}
+          <OverviewSection label="Usage" onOpen={() => setTab("usage")}>
+            {usageRows}
+          </OverviewSection>
+          <OverviewSection label="Timing" onOpen={() => setTab("timing")}>
+            {timingRows}
+          </OverviewSection>
         </div>
       ),
     },
@@ -236,48 +363,54 @@ function RequestInspector({ request }: { request: RequestSummary }) {
       label: "Usage",
       children: (
         <div>
-          <KeyValue label="Input" value={formatTokens(request.inputTokens)} />
-          <KeyValue label="Output" value={formatTokens(request.outputTokens)} />
-          <KeyValue
-            label="Total"
-            value={formatTokens(request.inputTokens + request.outputTokens)}
-          />
+          <Text strong style={{ fontSize: 12 }}>
+            {t(locale, "thisRequest")}
+          </Text>
+          {usageRows}
+          {request.sessionTotals ? (
+            <>
+              <Text
+                strong
+                style={{ fontSize: 12, display: "block", marginTop: 10 }}
+              >
+                {t(locale, "sessionTotal")}
+              </Text>
+              <UsageBreakdown
+                input={request.sessionTotals.inputTokens}
+                output={request.sessionTotals.outputTokens}
+                cacheRead={0}
+                cacheWrite={0}
+                reasoning={request.sessionTotals.reasoningTokens}
+              />
+            </>
+          ) : null}
         </div>
       ),
     },
-  ];
-  if (request.ttftMs !== null || request.decodeMs !== null) {
-    items.push({
+    {
       key: "timing",
       label: "Timing",
-      children: (
-        <div>
-          {request.ttftMs !== null ? (
-            <KeyValue
-              label="First TTFT"
-              value={formatSeconds(request.ttftMs / 1000)}
-            />
-          ) : null}
-          {request.decodeMs !== null ? (
-            <KeyValue
-              label="Total decoding"
-              value={formatSeconds(request.decodeMs / 1000)}
-            />
-          ) : null}
-          <KeyValue
-            label={t(locale, "throughput")}
-            value={formatThroughput(
-              request.outputTokens,
-              request.decodeMs === null ? null : request.decodeMs / 1000,
-            )}
-          />
-        </div>
-      ),
-    });
-  }
+      children: timingRows,
+    },
+    ...(request.options
+      ? [
+          {
+            key: "options",
+            label: "Options",
+            children: <Pre value={request.options} json />,
+          },
+        ]
+      : []),
+  ];
   return (
     <div style={{ padding: "8px 4px" }}>
-      <Tabs size="small" items={items} tabBarStyle={{ marginBottom: 8 }} />
+      <Tabs
+        size="small"
+        activeKey={tab}
+        onChange={(key: string) => setTab(key)}
+        items={items}
+        tabBarStyle={{ marginBottom: 8 }}
+      />
     </div>
   );
 }
@@ -513,6 +646,7 @@ export function Inspector({
   record,
   request,
   onJumpSession,
+  onJumpRecord,
   onSelectTurn,
   onClose,
 }: InspectorProps) {
@@ -575,7 +709,7 @@ export function Inspector({
         <ResizeHandle dragRef={dragRef} width={width} />
         <div style={{ padding: "8px 12px 0", overflow: "auto" }}>
           <CloseButton onClose={onClose} />
-          <RequestInspector request={request} />
+          <RequestInspector request={request} onJumpRecord={onJumpRecord} />
         </div>
       </aside>
     );
@@ -636,6 +770,9 @@ export function Inspector({
           }
           danger={selected.isError}
         />
+        {selected.provider ? (
+          <KeyValue label="Provider" value={selected.provider} />
+        ) : null}
         {selected.model ? (
           <KeyValue label={t(locale, "model")} value={selected.model} />
         ) : null}

@@ -356,6 +356,36 @@ class TestModelCall:
         assert result_ev["data"]["usage"]["input_tokens"] == 10
         assert result_ev["data"]["duration_ms"] >= 0
 
+    async def test_provider_extracted_from_model_chain(
+        self,
+        service,
+        hook_ctx,
+    ):
+        await AgentTraceRunStartHook().run(hook_ctx)
+        recording_wrapper = SimpleNamespace(
+            _provider_id="dashscope",
+            model="qwen3-max",
+        )
+        retry_wrapper = SimpleNamespace(
+            _inner=recording_wrapper,
+            model="qwen3-max",
+        )
+        fake_agent = SimpleNamespace(model=retry_wrapper)
+
+        async def next_handler(**kwargs):
+            return SimpleNamespace(text="a")
+
+        await TraceMiddleware().on_model_call(
+            agent=fake_agent,
+            input_kwargs={"messages": []},
+            next_handler=next_handler,
+        )
+        await AgentTraceFinalizeHook().run(hook_ctx)
+        events = await drained_events(service, "sess-1")
+        call = [e for e in events if e["type"] == "llm/call"][0]
+        assert call["data"]["provider"] == "dashscope"
+        assert call["data"]["model"] == "qwen3-max"
+
     async def test_options_digest_recorded(self, service, hook_ctx):
         await AgentTraceRunStartHook().run(hook_ctx)
 
@@ -480,6 +510,36 @@ class TestModelCall:
         assert result_ev["data"]["tool_calls"] == [
             {"name": "web_search", "id": "call-1"},
         ]
+
+    async def test_reasoning_tokens_extracted(self, service, hook_ctx):
+        from agentscope.model._model_usage import ChatUsage
+
+        await AgentTraceRunStartHook().run(hook_ctx)
+
+        async def next_handler(**kwargs):
+            return SimpleNamespace(
+                text="a",
+                usage=ChatUsage(
+                    input_tokens=10,
+                    output_tokens=7,
+                    time=0.1,
+                    metadata={
+                        "completion_tokens_details": {
+                            "reasoning_tokens": 5,
+                        },
+                    },
+                ),
+            )
+
+        await TraceMiddleware().on_model_call(
+            agent=None,
+            input_kwargs={"messages": []},
+            next_handler=next_handler,
+        )
+        await AgentTraceFinalizeHook().run(hook_ctx)
+        events = await drained_events(service, "sess-1")
+        result_ev = [e for e in events if e["type"] == "llm/result"][0]
+        assert result_ev["data"]["usage"]["reasoning_tokens"] == 5
 
     async def test_non_stream_has_no_timing(self, service, hook_ctx):
         await AgentTraceRunStartHook().run(hook_ctx)
@@ -786,6 +846,9 @@ class TestPluginEntry:
 
             def register_uninstall_hook(self, name, cb, priority=100):
                 calls["uninstall"].append((name, cb, priority))
+
+            def register_workspace_created_hook(self, name, cb, priority=100):
+                calls.setdefault("workspace_hooks", []).append(name)
 
         module.plugin.register(FakeApi())
 

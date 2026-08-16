@@ -98,7 +98,7 @@ runtime hooks (6个, PRE_DISPATCH→FINALLY)      AgentScope middleware
 
 - 后端 79 个测试：存储（读写/分页/容错/保留/恢复/竞态）、事件（脱敏/截断）、采集（钩子配对/流式/GeneratorExit/header/审批归属）、路由全端点
 - 前端：tsc 严格模式零错误、prettier、四道构建守卫、diff 算法 node 单测
-- 已知工程注意点：**`--force` 热更新后需重启才恢复采集**（宿主卸载不清 workspace 钩子注册，建议上游修复）；宿主 icons 版本较旧（构建守卫防越界）
+- 已知工程注意点：~~`--force` 热更新后需重启才恢复采集~~ **已修复**（宿主 `multi_agent_manager` 在 workspace 实例替换后补发 `workspace_created` 钩子，commit `53902f7b`；2026-08-16 实测：force 热更新 → 不重启 → 新对话正常采集，日志可见 `runtime hooks attached to workspace ...`）；宿主 icons 版本较旧（构建守卫防越界）
 
 ## 9. 已知限制（明确不做/做不到）
 
@@ -121,10 +121,14 @@ runtime hooks (6个, PRE_DISPATCH→FINALLY)      AgentScope middleware
 | `75c93b82` | 审批流 + 入站/出站报文捕获 |
 | `c16dfa46` | 入站事件归属 run（PRE_EXECUTE 移位 + 折叠兜底） |
 | `031757d0` | 审批事件归属活跃 run（ContextVar + 映射 + 折叠兜底） |
+| `7b697c65` | 会话列表读 chats.json 补 Console 会话标题/状态/agent |
+| `75c6b045` | 会话列表按 agent 分组折叠 |
+| `a31206c3` | 会话统计条 + 按需检查器（Kimi 协作） |
+| `53902f7b` | **宿主修复**：workspace 替换后补发 created 钩子——force 热更新不再断采集 |
 
 ## 11. 后续路线（未做，按价值排序）
 
 1. P2 生态项（可不对齐）：agent 自查工具（session_search/trace 挂给 agent）、feedback 评分关联、OTel 遥测外发
 2. 导出增强：ZIP 打包含子会话、HEAD 预检、批量
 3. 聊天页内嵌轨迹入口（需 Console 侧挂载点，深链 `?session=` 已就绪）
-4. 上游 issue：force 热更新不断采集的钩子清理；localhost bypass 范围收窄
+4. ~~上游 issue：force 热更新不断采集的钩子清理~~ 已修复（见第 8 节）；localhost bypass 范围收窄仍待上游
