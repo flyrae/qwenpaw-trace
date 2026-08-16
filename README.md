@@ -12,6 +12,22 @@ table, and a record inspector.
 > [DESIGN.md](./DESIGN.md)（Full architecture, event model, API,
 > limitations, and history: see [DESIGN.md](./DESIGN.md)).
 
+## Screenshots
+
+![Trajectory overview: stats strip, three-lane timeline, request-grouped ledger](docs/images/overview.png)
+
+![Record inspector: click any row for Summary / Payload / Result / Timing / Usage / Raw](docs/images/inspector.png)
+
+## Installation
+
+```bash
+qwenpaw plugin install https://github.com/flyrae/qwenpaw-trace/releases/download/v0.1.0/agent-trace-0.1.0.zip
+```
+
+Compatible with QwenPaw 2.1.0–2.2.0. After installing (or updating),
+hard-refresh the Console (Ctrl+Shift+R); backend changes additionally
+need a QwenPaw restart.
+
 ## Attribution
 
 The timeline projection algorithm (`frontend/src/trajectory/timeline.ts`),
