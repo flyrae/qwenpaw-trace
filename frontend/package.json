@@ -1,0 +1,22 @@
+{
+  "name": "agent-trace-plugin-ui",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build": "node scripts/check-icons.js && vite build && node scripts/check-bundle.js && node scripts/smoke-import.js",
+    "check:icons": "node scripts/check-icons.js",
+    "check:bundle": "node scripts/check-bundle.js",
+    "format": "tsc --noEmit && prettier --write --cache .",
+    "format:check": "tsc --noEmit && prettier --check ."
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@vitejs/plugin-react": "^4.3.1",
+    "prettier": "3.0.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.2"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "^3.14.9"
+  }
+}
