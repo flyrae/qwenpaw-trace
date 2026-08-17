@@ -7,7 +7,45 @@
  * DeepSeek.
  */
 
+import type { TraceLocale } from "../locale";
+
 export type RecordKind = "user" | "message" | "tool" | "system";
+
+/**
+ * Sub-kind of a system-marker record. Markers come from different
+ * sources (approvals, delivery receipts, spawns, prompt snapshots,
+ * errors); the ledger gives each its own tag instead of one shared
+ * "system" label.
+ */
+export type MarkerKind = "approval" | "receipt" | "spawn" | "header" | "error";
+
+export const MARKER_LABELS: Record<MarkerKind, { zh: string; en: string }> = {
+  approval: { zh: "审批", en: "Approval" },
+  receipt: { zh: "回执", en: "Receipt" },
+  spawn: { zh: "子代理", en: "Spawn" },
+  header: { zh: "提示词", en: "Prompt" },
+  error: { zh: "错误", en: "Error" },
+};
+
+export const KIND_LABELS: Record<string, { zh: string; en: string }> = {
+  user: { zh: "用户", en: "USER" },
+  message: { zh: "助手", en: "ASSISTANT" },
+  tool: { zh: "工具", en: "TOOL" },
+  system: { zh: "标记", en: "SYSTEM" },
+};
+
+/** Ledger-tag label of a record: marker sub-kind when present. */
+export function recordKindLabel(
+  record: Pick<TrajectoryRecord, "kind" | "markerKind">,
+  locale: TraceLocale,
+): string {
+  const marker = record.markerKind
+    ? MARKER_LABELS[record.markerKind]
+    : undefined;
+  if (marker) return locale === "zh-CN" ? marker.zh : marker.en;
+  const base = KIND_LABELS[record.kind];
+  return base ? (locale === "zh-CN" ? base.zh : base.en) : record.kind;
+}
 
 export interface MessageDigest {
   role: string;
@@ -29,6 +67,12 @@ export interface TimingInfo {
   decode_ms: number;
 }
 
+/** One content part of a channel inbound message. */
+export interface InboundPart {
+  type: string;
+  text?: string;
+}
+
 /** One ledger row: a user input, an LLM call, a tool call, or a marker. */
 export interface TrajectoryRecord {
   index: number;
@@ -42,6 +86,12 @@ export interface TrajectoryRecord {
   running: boolean;
   /* user */
   messages?: MessageDigest[];
+  /* user message source (merged from message/inbound) */
+  channel?: string;
+  userId?: string;
+  inboundParts?: InboundPart[];
+  /* channel delivery receipt (message/outbound) */
+  receipt?: { channel?: string; chars: number };
   /* assistant */
   model?: string;
   provider?: string;
@@ -58,6 +108,8 @@ export interface TrajectoryRecord {
   toolError?: string;
   /* system marker */
   marker?: string;
+  /* marker sub-kind (distinct ledger tag per marker source) */
+  markerKind?: MarkerKind;
   /* request header (system prompt snapshot) */
   prompt?: string;
   prevPrompt?: string;

@@ -9,6 +9,7 @@
 
 import type { TraceEvent } from "../traceApi";
 import type {
+  InboundPart,
   MessageDigest,
   TimingInfo,
   TrajectoryRecord,
@@ -57,6 +58,11 @@ export function buildTurns(events: TraceEvent[]): TrajectoryTurnModel[] {
   // cells with an unknown run_id (e.g. approval ids from older data)
   // attach to it instead of being dropped or landing pre-run.
   let openRunId = "";
+  // Channel of each run (from run/start) — used to label the inbound
+  // user message and the outbound delivery receipt.
+  const channelByRun = new Map<string, string>();
+  // The USER record of each run — message/inbound merges into it.
+  const userCellByRun = new Map<string, TrajectoryRecord>();
   const promptBySha = new Map<string, string>();
   let index = 0;
   let runNumber = 0;
@@ -108,6 +114,10 @@ export function buildTurns(events: TraceEvent[]): TrajectoryTurnModel[] {
     switch (event.type) {
       case "run/start": {
         runNumber += 1;
+        channelByRun.set(
+          event.run_id,
+          typeof data.channel === "string" ? data.channel : "",
+        );
         const turn: TrajectoryTurnModel = {
           turn: runNumber,
           status: "running",
@@ -126,7 +136,7 @@ export function buildTurns(events: TraceEvent[]): TrajectoryTurnModel[] {
           ? (data.messages as MessageDigest[])
           : [];
         const query = String(data.query ?? "");
-        cellsOf(turn).push({
+        const userCell: TrajectoryRecord = {
           index: ++index,
           runIndex: runNumber,
           runId: event.run_id,
@@ -138,12 +148,16 @@ export function buildTurns(events: TraceEvent[]): TrajectoryTurnModel[] {
           isError: false,
           running: false,
           model: undefined,
-        });
+        };
+        userCellByRun.set(event.run_id, userCell);
+        cellsOf(turn).push(userCell);
         break;
       }
       case "run/end": {
         const turn = turnByRun.get(event.run_id);
         if (openRunId === event.run_id) openRunId = "";
+        channelByRun.delete(event.run_id);
+        userCellByRun.delete(event.run_id);
         const status = String(data.status ?? "unknown");
         if (turn) {
           turn.status = status;
@@ -164,6 +178,7 @@ export function buildTurns(events: TraceEvent[]): TrajectoryTurnModel[] {
             runIndex: runNumber,
             runId: event.run_id,
             kind: "system",
+            markerKind: "error",
             text: firstLine(String(data.error)) || "run failed",
             marker: String(data.error ?? "run failed"),
             timeSeconds:
@@ -190,7 +205,8 @@ export function buildTurns(events: TraceEvent[]): TrajectoryTurnModel[] {
           runIndex: 0,
           runId: event.run_id,
           kind: "system",
-          text: `🚀 ${childAgent} → ${childSession ?? "?"}`,
+          markerKind: "spawn",
+          text: `${childAgent} → ${childSession ?? "?"}`,
           timeSeconds: 0,
           startedAt: epochMs(event.t),
           isError: false,
@@ -202,39 +218,82 @@ export function buildTurns(events: TraceEvent[]): TrajectoryTurnModel[] {
         break;
       }
       case "message/inbound": {
+        // The channel envelope of this run's user message. It merges
+        // into the run's USER record (dsh semantics: the user record
+        // carries its source); a standalone readable cell is created
+        // only when the run has no user record (old data / orphan).
         const parts = Array.isArray(data.parts)
           ? (data.parts as Record<string, unknown>[])
           : [];
-        const kinds = parts
-          .map((part) => String(part.type ?? "?").replace("Content", ""))
-          .join(",");
-        appendCell(event.run_id, {
-          index: ++index,
-          runIndex: 0,
-          runId: event.run_id,
-          kind: "system",
-          text: `📥 ${parts.length} part(s)${kinds ? ` [${kinds}]` : ""}`,
-          timeSeconds: 0,
-          startedAt: epochMs(event.t),
-          isError: false,
-          running: false,
-          raw: [event as unknown as Record<string, unknown>],
-        });
+        const meta =
+          data.channel_meta && typeof data.channel_meta === "object"
+            ? (data.channel_meta as Record<string, unknown>)
+            : undefined;
+        const inboundParts: InboundPart[] = parts.map((part) => ({
+          type: String(part.type ?? "?"),
+          text: typeof part.text === "string" ? part.text : undefined,
+        }));
+        const channel = channelByRun.get(event.run_id) ?? "";
+        const userId =
+          meta && typeof meta.user_id === "string" && meta.user_id
+            ? meta.user_id
+            : undefined;
+        const textFromParts = firstLine(
+          inboundParts
+            .map((part) => part.text ?? "")
+            .filter(Boolean)
+            .join("\n"),
+        );
+        const userCell = userCellByRun.get(event.run_id);
+        if (userCell && !userCell.inboundParts) {
+          userCell.inboundParts = inboundParts;
+          userCell.channel = channel || undefined;
+          userCell.userId = userId;
+          userCell.raw = [
+            ...(userCell.raw ?? []),
+            event as unknown as Record<string, unknown>,
+          ];
+          if (!userCell.text) userCell.text = textFromParts;
+        } else {
+          appendCell(event.run_id, {
+            index: ++index,
+            runIndex: 0,
+            runId: event.run_id,
+            kind: "user",
+            text: textFromParts || "📥",
+            timeSeconds: 0,
+            startedAt: epochMs(event.t),
+            isError: false,
+            running: false,
+            channel: channel || undefined,
+            userId,
+            inboundParts,
+            raw: [event as unknown as Record<string, unknown>],
+          });
+        }
         break;
       }
       case "message/outbound": {
+        // Delivery receipt for the final reply. The ledger shows a
+        // one-line receipt (channel + length) instead of duplicating
+        // the assistant text; the Inspector keeps the full payload.
         const text2 = typeof data.text === "string" ? data.text : "";
         appendCell(event.run_id, {
           index: ++index,
           runIndex: 0,
           runId: event.run_id,
           kind: "system",
-          text: `📤 ${firstLine(text2) || "(empty)"}`,
+          markerKind: "receipt",
+          text: "📤",
           timeSeconds: 0,
           startedAt: epochMs(event.t),
           isError: false,
           running: false,
           outputText: text2 || undefined,
+          receipt: {
+            channel: channelByRun.get(event.run_id) || undefined,
+            chars: text2.length,
+          },
           raw: [event as unknown as Record<string, unknown>],
         });
         break;
@@ -245,7 +304,8 @@ export function buildTurns(events: TraceEvent[]): TrajectoryTurnModel[] {
           runIndex: 0,
           runId: event.run_id,
           kind: "system",
-          text: `🛡 approval asked: ${String(data.tool_name ?? "?")}`,
+          markerKind: "approval",
+          text: String(data.tool_name ?? "?"),
           timeSeconds: 0,
           startedAt: epochMs(event.t),
           isError: false,
@@ -256,14 +316,14 @@ export function buildTurns(events: TraceEvent[]): TrajectoryTurnModel[] {
       }
       case "approval/decided": {
         const decision = String(data.decision ?? "?");
+        const tool = data.tool_name ? String(data.tool_name) : "";
         appendCell(event.run_id, {
           index: ++index,
           runIndex: 0,
           runId: event.run_id,
           kind: "system",
-          text: `🛡 approval ${decision}${
-            data.tool_name ? `: ${String(data.tool_name)}` : ""
-          }`,
+          markerKind: "approval",
+          text: tool ? `${tool} → ${decision}` : decision,
           timeSeconds: 0,
           startedAt: epochMs(event.t),
           isError: decision === "denied",
@@ -288,6 +348,7 @@ export function buildTurns(events: TraceEvent[]): TrajectoryTurnModel[] {
           runIndex: 0,
           runId: event.run_id,
           kind: "system",
+          markerKind: "header",
           text:
             reason === "initial"
               ? `⚙ ${

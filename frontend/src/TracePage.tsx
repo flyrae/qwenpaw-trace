@@ -864,73 +864,147 @@ export function TracePage() {
             padding: "8px 12px",
             borderBottom: "1px solid rgba(128,128,128,0.15)",
             display: "flex",
-            alignItems: "center",
-            gap: 16,
-            flexWrap: "wrap",
+            flexDirection: "column",
+            gap: 4,
           }}
         >
-          {statsStrip ? (
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {statsStrip}
-            </Text>
-          ) : selectedSummary ? (
-            // Transient line while the stats endpoint responds.
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {`${selectedSummary.runs} ${t(locale, "statRounds")} · ${
-                selectedSummary.llm_calls
-              } ${t(locale, "statSteps")} · ${formatCount(
-                selectedSummary.total_tokens,
-              )} ${t(locale, "tokens")} · ${formatBytes(
-                selectedSummary.size_bytes,
-              )}`}
-            </Text>
-          ) : (
-            <Text type="secondary" style={{ fontSize: 13 }}>
-              {t(locale, "selectSession")}
-            </Text>
-          )}
-          <div style={{ marginLeft: "auto" }}>
-            <Space>
-              <SettingsPopover config={config} onChange={applyConfig}>
-                <Button size="small" icon={<SettingOutlined />} />
-              </SettingsPopover>
-              {selected && (
-                <>
-                  <Button
-                    size="small"
-                    icon={<DownloadOutlined />}
-                    onClick={() => {
-                      void exportSessionFile(selected)
-                        .then(() => message.success(t(locale, "exported")))
-                        .catch((exc: Error) =>
-                          message.error(String(exc.message)),
-                        );
-                    }}
+          {selected ? (
+            <>
+              {/* Row 1: session identity + actions */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  minWidth: 0,
+                }}
+              >
+                <Text
+                  strong
+                  ellipsis={{
+                    tooltip: selectedSummary?.title || selected,
+                  }}
+                  style={{ fontSize: 13, flex: "0 1 auto", minWidth: 60 }}
+                >
+                  {selectedSummary?.title ||
+                    selectedSummary?.agent_id ||
+                    shortId(selected)}
+                </Text>
+                <Tag
+                  color={
+                    STATUS_COLORS[selectedSummary?.status ?? ""] ?? "default"
+                  }
+                  style={{ marginInlineEnd: 0, flexShrink: 0 }}
+                >
+                  {statusText(selectedSummary?.status ?? "unknown")}
+                </Tag>
+                {selectedSummary?.channel ? (
+                  <Text
+                    type="secondary"
+                    style={{ fontSize: 11, flexShrink: 0 }}
                   >
-                    {t(locale, "export")}
-                  </Button>
-                  <Popconfirm
-                    title={t(locale, "deleteConfirm")}
-                    onConfirm={() => {
-                      void deleteSessionRemote(selected)
-                        .then(() => {
-                          message.success(t(locale, "deleted"));
-                          setSelected(null);
-                          void loadSessions();
-                        })
-                        .catch((exc: Error) =>
-                          message.error(String(exc.message)),
-                        );
-                    }}
-                  >
-                    <Button size="small" danger icon={<DeleteOutlined />}>
-                      {t(locale, "delete")}
+                    {selectedSummary.channel}
+                  </Text>
+                ) : null}
+                <div style={{ marginLeft: "auto", flexShrink: 0 }}>
+                  <Space>
+                    <SettingsPopover config={config} onChange={applyConfig}>
+                      <Button size="small" icon={<SettingOutlined />} />
+                    </SettingsPopover>
+                    <Button
+                      size="small"
+                      icon={<DownloadOutlined />}
+                      onClick={() => {
+                        void exportSessionFile(selected)
+                          .then(() => message.success(t(locale, "exported")))
+                          .catch((exc: Error) =>
+                            message.error(String(exc.message)),
+                          );
+                      }}
+                    >
+                      {t(locale, "export")}
                     </Button>
-                  </Popconfirm>
-                </>
-              )}
-            </Space>
-          </div>
+                    <Popconfirm
+                      title={t(locale, "deleteConfirm")}
+                      onConfirm={() => {
+                        void deleteSessionRemote(selected)
+                          .then(() => {
+                            message.success(t(locale, "deleted"));
+                            setSelected(null);
+                            void loadSessions();
+                          })
+                          .catch((exc: Error) =>
+                            message.error(String(exc.message)),
+                          );
+                      }}
+                    >
+                      <Button size="small" danger icon={<DeleteOutlined />}>
+                        {t(locale, "delete")}
+                      </Button>
+                    </Popconfirm>
+                  </Space>
+                </div>
+              </div>
+              {/* Row 2: stats strip + copyable session id */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  flexWrap: "wrap",
+                }}
+              >
+                <Text
+                  type="secondary"
+                  style={{ fontSize: 11, flex: "1 1 300px", minWidth: 0 }}
+                >
+                  {statsStrip ??
+                    // Transient line while the stats endpoint responds.
+                    (selectedSummary
+                      ? `${selectedSummary.runs} ${t(locale, "statRounds")} · ${
+                          selectedSummary.llm_calls
+                        } ${t(locale, "statSteps")} · ${formatCount(
+                          selectedSummary.total_tokens,
+                        )} ${t(locale, "tokens")} · ${formatBytes(
+                          selectedSummary.size_bytes,
+                        )}`
+                      : "")}
+                </Text>
+                <Text
+                  type="secondary"
+                  copyable={{
+                    text: selected,
+                    tooltips: [
+                      t(locale, "copySessionId"),
+                      t(locale, "copiedSessionId"),
+                    ],
+                  }}
+                  style={{ fontSize: 11, marginLeft: "auto", flexShrink: 0 }}
+                >
+                  {selected}
+                </Text>
+              </div>
+            </>
+          ) : (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <Text type="secondary" style={{ fontSize: 13 }}>
+                {t(locale, "selectSession")}
+              </Text>
+              {/* Capture settings are global — keep the entry visible
+                  even when no session is selected. */}
+              <div style={{ marginLeft: "auto", flexShrink: 0 }}>
+                <SettingsPopover config={config} onChange={applyConfig}>
+                  <Button size="small" icon={<SettingOutlined />} />
+                </SettingsPopover>
+              </div>
+            </div>
+          )}
         </div>
         {error && (
           <div style={{ padding: "2px 12px" }}>

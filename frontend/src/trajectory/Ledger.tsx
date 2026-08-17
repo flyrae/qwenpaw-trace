@@ -13,8 +13,13 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type * as ReactNS from "react";
 
 import { storedLocale, t } from "../locale";
-import type { TrajectoryRecord, TrajectoryTurnModel } from "./records";
-import { formatSeconds, formatTokens } from "./records";
+import type { TraceLocale, TraceStringKey } from "../locale";
+import type {
+  MarkerKind,
+  TrajectoryRecord,
+  TrajectoryTurnModel,
+} from "./records";
+import { formatSeconds, formatTokens, recordKindLabel } from "./records";
 
 const host = window.QwenPaw.host;
 const React: typeof ReactNS = host.React;
@@ -23,7 +28,12 @@ const { Tag } = host.antd;
 const { Text } = host.antd.Typography;
 const {
   CaretRightOutlined,
+  CloseCircleOutlined,
+  FileTextOutlined,
   RobotOutlined,
+  RocketOutlined,
+  SafetyOutlined,
+  SendOutlined,
   SettingOutlined,
   ToolOutlined,
   UserOutlined,
@@ -43,11 +53,16 @@ const KIND_ICONS: Record<string, ReactNS.ReactNode> = {
   system: <SettingOutlined />,
 };
 
-const KIND_LABELS: Record<string, { zh: string; en: string }> = {
-  user: { zh: "用户", en: "USER" },
-  message: { zh: "助手", en: "ASSISTANT" },
-  tool: { zh: "工具", en: "TOOL" },
-  system: { zh: "标记", en: "SYSTEM" },
+/** Distinct tag color/icon per marker sub-kind (label via records.ts). */
+const MARKER_META: Record<
+  MarkerKind,
+  { color: string; icon: ReactNS.ReactNode }
+> = {
+  approval: { color: "volcano", icon: <SafetyOutlined /> },
+  receipt: { color: "cyan", icon: <SendOutlined /> },
+  spawn: { color: "geekblue", icon: <RocketOutlined /> },
+  header: { color: "green", icon: <FileTextOutlined /> },
+  error: { color: "red", icon: <CloseCircleOutlined /> },
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -75,16 +90,42 @@ const BOUNDARY_HEIGHT = 34;
 const DIVIDER_HEIGHT = 9;
 const LOAD_OLDER_HEIGHT = 30;
 
-function kindLabel(kind: string): string {
-  const locale = storedLocale();
-  const entry = KIND_LABELS[kind];
-  return entry ? (locale === "zh-CN" ? entry.zh : entry.en) : kind;
-}
-
 function statusLabel(status: string): string {
   const locale = storedLocale();
   const entry = STATUS_LABELS[status] ?? STATUS_LABELS.unknown;
   return locale === "zh-CN" ? entry.zh : entry.en;
+}
+
+const PART_TYPE_KEYS: Record<string, TraceStringKey> = {
+  ImageContent: "image",
+  FileContent: "file",
+  AudioContent: "audio",
+  VideoContent: "video",
+};
+
+/** Non-text media summary of a user message, e.g. "图片×1 文件×2". */
+function mediaPartsLabel(
+  record: TrajectoryRecord,
+  locale: TraceLocale,
+): string | null {
+  const counts = new Map<TraceStringKey, number>();
+  for (const part of record.inboundParts ?? []) {
+    const key = PART_TYPE_KEYS[part.type];
+    if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  if (counts.size === 0) return null;
+  return [...counts.entries()]
+    .map(([key, count]) => `${t(locale, key)}×${count}`)
+    .join(" ");
+}
+
+/** One-line delivery receipt for an outbound message row. */
+function receiptLabel(record: TrajectoryRecord, locale: TraceLocale): string {
+  const receipt = record.receipt;
+  const channel = receipt?.channel ? ` · ${receipt.channel}` : "";
+  return `📤 ${t(locale, "replySent")}${channel} · ${(
+    receipt?.chars ?? 0
+  ).toLocaleString()} ${t(locale, "chars")}`;
 }
 
 interface LedgerRowModel {
@@ -169,8 +210,15 @@ function RecordRow({
         #{record.index}
       </span>
       <Tag
-        color={KIND_COLORS[record.kind] ?? "default"}
-        icon={KIND_ICONS[record.kind]}
+        color={
+          (record.markerKind && MARKER_META[record.markerKind]?.color) ||
+          KIND_COLORS[record.kind] ||
+          "default"
+        }
+        icon={
+          (record.markerKind && MARKER_META[record.markerKind]?.icon) ||
+          KIND_ICONS[record.kind]
+        }
         style={{
           marginInlineEnd: 0,
           fontSize: 10,
@@ -178,7 +226,7 @@ function RecordRow({
           flexShrink: 0,
         }}
       >
-        {kindLabel(record.kind)}
+        {recordKindLabel(record, storedLocale())}
       </Tag>
       <span
         style={{
@@ -190,7 +238,11 @@ function RecordRow({
           fontSize: 12,
         }}
       >
-        {record.kind === "tool" && record.toolName ? (
+        {record.receipt ? (
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {receiptLabel(record, storedLocale())}
+          </Text>
+        ) : record.kind === "tool" && record.toolName ? (
           <>
             <Text strong style={{ fontSize: 12 }}>
               {record.toolName}
@@ -206,12 +258,26 @@ function RecordRow({
             ) : null}
           </>
         ) : (
-          <Text
-            type={record.isError ? "danger" : undefined}
-            style={{ fontSize: 12 }}
-          >
-            {record.running ? `⏳ ${record.text || "…"}` : record.text || "—"}
-          </Text>
+          <>
+            <Text
+              type={record.isError ? "danger" : undefined}
+              style={{ fontSize: 12 }}
+            >
+              {record.running ? `⏳ ${record.text || "…"}` : record.text || "—"}
+            </Text>
+            {record.kind === "user" ? (
+              <>
+                <Text type="secondary" style={{ fontSize: 11 }}>{` ${
+                  mediaPartsLabel(record, storedLocale()) ?? ""
+                }`}</Text>
+                {record.channel && record.channel !== "console" ? (
+                  <Text code style={{ fontSize: 10 }}>
+                    {` @${record.channel}`}
+                  </Text>
+                ) : null}
+              </>
+            ) : null}
+          </>
         )}
       </span>
       <span

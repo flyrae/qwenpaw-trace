@@ -43,10 +43,10 @@ runtime hooks (6个, PRE_DISPATCH→FINALLY)      AgentScope middleware
 | `llm/result` | 调用结束 | 输出全文、thinking、模型发出的 tool_calls、usage（含 cache read/write）、`timing`（TTFT/解码时长，流式）、错误 |
 | `tool/call` | on_acting 进入 | 工具名、原始入参、tool_call_id |
 | `tool/result` | 完成/异常/GeneratorExit | 输出、耗时、错误、note（提前关闭标注） |
-| `approval/asked` | ApprovalService.create_pending 补丁 | 工具名、severity、findings、摘要；**归属当前活跃 run** |
-| `approval/decided` | resolve_request / 批量取消补丁 | approved/denied/timed_out/cancelled + scope；asked 时记住 run 映射，跨会话决策也落回原 run |
+| `approval/asked` | ApprovalService.create_pending **及 create_pending_summary** 补丁 | 工具名、severity、findings、摘要、`source_type`（tool_guard / driver_policy / harness / 插件）；**归属当前活跃 run** |
+| `approval/decided` | resolve_request / cancel_stale / cancel_all 补丁 | approved/denied/timed_out/cancelled/**superseded** + scope；asked 时记住 run 映射（上限 1024，FIFO 逐出），跨会话决策也落回原 run；批量取消**逐条落回各自会话文件** |
 | `agent/spawn` | 子代理 run 开启时写入**根会话**文件 | child_session_id / child_agent_id / child_trace_id |
-| `message/outbound` | POST_RESPONSE(95)，session_save 后 | 最终 assistant 回复全文（读 agent.state.context，与 runtime 同路径） |
+| `message/outbound` | POST_RESPONSE(95)，session_save 后 | 最终 assistant 回复全文（读 agent.state.context，与 runtime 同路径）；台账渲染为**一行回执**（`📤 已回复 · 渠道 · 字数`），不重复正文 |
 | `run/end` | POST_RESPONSE / ON_ERROR / FINALLY 兜底 | success / error / cancelled / interrupted（崩溃恢复合成） |
 
 采集全部 fail-open：任何异常只 debug 日志，绝不影响 agent 回复。
@@ -96,7 +96,7 @@ runtime hooks (6个, PRE_DISPATCH→FINALLY)      AgentScope middleware
 
 ## 8. 测试与质量
 
-- 后端 79 个测试：存储（读写/分页/容错/保留/恢复/竞态）、事件（脱敏/截断）、采集（钩子配对/流式/GeneratorExit/header/审批归属）、路由全端点
+- 后端 88 个测试：存储（读写/分页/容错/保留/恢复/竞态）、事件（脱敏/截断）、采集（钩子配对/流式/GeneratorExit/header/审批归属）、审批补丁（summary/superseded/逐条取消/非 LIFO restore/映射上限）、路由全端点
 - 前端：tsc 严格模式零错误、prettier、四道构建守卫、diff 算法 node 单测
 - 已知工程注意点：~~`--force` 热更新后需重启才恢复采集~~ **已修复**（宿主 `multi_agent_manager` 在 workspace 实例替换后补发 `workspace_created` 钩子，commit `53902f7b`；2026-08-16 实测：force 热更新 → 不重启 → 新对话正常采集，日志可见 `runtime hooks attached to workspace ...`）；宿主 icons 版本较旧（构建守卫防越界）
 
@@ -109,6 +109,10 @@ runtime hooks (6个, PRE_DISPATCH→FINALLY)      AgentScope middleware
 | llm call/result FIFO 配对 | ReAct 串行调用下无风险；工具已按 tool_call_id 精确配对 |
 | REST 无插件侧鉴权 | 宿主 localhost bypass 全局设计（CLI 依赖），归属上游 |
 | 前端无自动化 UI 测试 | 守卫链 + tsc 覆盖加载期；交互靠人工验收 |
+| GC 驱逐的审批无 decided 事件 | 宿主 `_gc_pending_locked` 直接弹出（>30min 陈旧 / >200 溢出），无私有外缝；对应 asked 悬挂，ask-run 映射靠容量上限兜底 |
+| decided 不记录决策者身份 | 宿主 `resolve_request` 签名不含决策者，插件无从获取（上游数据模型限制） |
+
+**审批补丁的共存安全**（v0.2.1）：qwenpaw-pet 补丁相同方法且捕获我们的 wrapper 作 original，朴素 restore 在非 LIFO 顺序下会互踩。本插件采取两层防护：restore 仅在类属性**仍是自己的 wrapper** 时才还原（外层 patcher 持直接引用继续工作）；wrapper 按代检查 `active` 标志，卸载后残留在外层链中的旧 wrapper 自动降级为透传，不重复记录、不形成环。
 
 ## 10. 演进记录（分支 `agent-trace`）
 
@@ -125,6 +129,9 @@ runtime hooks (6个, PRE_DISPATCH→FINALLY)      AgentScope middleware
 | `75c6b045` | 会话列表按 agent 分组折叠 |
 | `a31206c3` | 会话统计条 + 按需检查器（Kimi 协作） |
 | `53902f7b` | **宿主修复**：workspace 替换后补发 created 钩子——force 热更新不再断采集 |
+| （本次） | 审批补丁复核修复：包装 `create_pending_summary`（driver gate/harness/computer-use 路径）、`cancel_stale` superseded 事件、cancel_all 逐条落回子会话、身份校验式 restore 防 qwenpaw-pet 互踩、ask-run 映射容量上限；88 测试 |
+| （本次） | 台账可读性：入站报文**合并进 USER 行**（来源渠道/用户/多媒体部件，旧数据降级为可读独立行），出站报文改为一行**回执**（渠道 + 字数，不再重复回复正文） |
+| （本次） | 标记行细分：审批（🛡盾牌/volcano）、回执（📤发送/cyan）、子代理（🚀火箭/geekblue）、提示词（📄文档/green）、错误（⭕红）各有专属标签与图标，不再共用"标记"；Inspector Kind 字段同步 |
 
 ## 11. 后续路线（未做，按价值排序）
 
