@@ -12,6 +12,16 @@ table, and a record inspector.
 > [DESIGN.md](./DESIGN.md)（Full architecture, event model, API,
 > limitations, and history: see [DESIGN.md](./DESIGN.md)).
 
+## Screenshots / 截图
+
+**轨迹总览** — 会话分组列表、统计条、三泳道时间线与台账:
+
+![Trajectory overview: session list, stats strip, three-lane timeline and ledger](docs/images/overview.png)
+
+**记录检查器** — 单条记录的摘要 / 输入输出 / Timing / Usage / Raw:
+
+![Record inspector: summary, IO, timing, usage and raw tabs](docs/images/inspector.png)
+
 ## Attribution
 
 The timeline projection algorithm (`frontend/src/trajectory/timeline.ts`),
