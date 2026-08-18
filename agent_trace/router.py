@@ -35,6 +35,20 @@ def _validate_session_id(session_id: str) -> str:
     return session_id
 
 
+async def _resolve_chat(
+    chat_id: str = Query(..., min_length=1),
+) -> Dict[str, Any]:
+    """Resolve a Console chat id (local timestamp id) to its backend
+    trace session id. Backend session ids resolve to themselves."""
+    service = _require_service()
+    _validate_session_id(chat_id)
+    session_id = await asyncio.to_thread(
+        service.resolve_chat_session,
+        chat_id,
+    )
+    return {"session_id": session_id}
+
+
 def build_router() -> APIRouter:
     """Build the plugin router mounted at ``/api/agent-trace``."""
     router = APIRouter()
@@ -55,6 +69,8 @@ def build_router() -> APIRouter:
             "offset": offset,
             "has_more": offset + len(window) < len(sessions),
         }
+
+    router.add_api_route("/resolve", _resolve_chat, methods=["GET"])
 
     @router.get("/sessions/{session_id}")
     async def get_session(

@@ -184,6 +184,56 @@ class TestSessions:
         assert summary["title"] == "上海天气查询"
         assert summary["chat_status"] == "idle"
 
+    async def test_resolve_local_chat_id(
+        self,
+        client,
+        service,
+        tmp_path,
+    ):
+        import json as jsonlib
+
+        workspaces = tmp_path / "workspaces" / "default"
+        workspaces.mkdir(parents=True, exist_ok=True)
+        local_id = "1787062840088-3bw37ec"
+        (workspaces / "chats.json").write_text(
+            jsonlib.dumps(
+                {
+                    "version": 1,
+                    "chats": [
+                        {
+                            "id": local_id,
+                            "session_id": "sess-1",
+                            "name": "new chat",
+                        },
+                    ],
+                },
+            ),
+            encoding="utf-8",
+        )
+        await seed_session(service)
+
+        response = await client.get(
+            "/agent-trace/resolve",
+            params={"chat_id": local_id},
+        )
+        assert response.status_code == 200
+        assert response.json() == {"session_id": "sess-1"}
+
+        # Backend session ids resolve to themselves.
+        response = await client.get(
+            "/agent-trace/resolve",
+            params={"chat_id": "sess-1"},
+        )
+        assert response.json() == {"session_id": "sess-1"}
+
+        # Unknown ids resolve to null, not an error.
+        response = await client.get(
+            "/agent-trace/resolve",
+            params={"chat_id": "9999-nothing"},
+        )
+        assert response.status_code == 200
+        assert response.json() == {"session_id": None}
+
     async def test_filter_by_type_and_query(self, client, service):
         await seed_session(service)
         response = await client.get(
@@ -286,9 +336,12 @@ class TestConfig:
         )
         assert saved["enabled"] is False
         # New patterns take effect on the next sanitize call.
-        assert service.sanitize(
-            {"text": "secret-42"},
-        )["text"] == "***"
+        assert (
+            service.sanitize(
+                {"text": "secret-42"},
+            )["text"]
+            == "***"
+        )
 
     async def test_put_invalid_rejected(self, client):
         response = await client.put(

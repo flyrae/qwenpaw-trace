@@ -31,7 +31,9 @@ const walk = (dir) => {
     if (entry.isDirectory()) walk(full);
     else if (/\.(tsx?|js)$/.test(entry.name)) {
       const text = fs.readFileSync(full, "utf8");
-      for (const match of text.matchAll(/\b([A-Za-z]+(?:Outlined|Filled))\b/g)) {
+      for (const match of text.matchAll(
+        /\b([A-Za-z]+(?:Outlined|Filled))\b/g,
+      )) {
         used.add(match[1]);
       }
     }

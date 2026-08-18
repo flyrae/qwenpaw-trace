@@ -66,18 +66,20 @@ runtime hooks (6个, PRE_DISPATCH→FINALLY)      AgentScope middleware
 |---|---|
 | `GET /sessions?limit=&offset=` | 分页会话列表（runs/llm/tools/token/状态摘要） |
 | `GET /sessions/{id}?before_seq=&limit=&type=&q=` | 事件窗口分页 + 类型/关键词服务端过滤 |
+| `GET /resolve?chat_id=` | Console 本地聊天 id → 后端轨迹会话 id（chats.json id 索引；后端 id 原样返回） |
 | `GET /sessions/{id}/stats` | 全量统计：时长、首/均 TTFT、解码总时长、token 四桶、按模型分解 |
 | `GET /sessions/{id}/lineage` | root 链接 + spawn 子会话列表 |
 | `GET /sessions/{id}/export` | 原始 JSONL 下载 |
 | `DELETE /sessions/{id}` | 删除（联动 sha 缓存清理） |
 | `GET/PUT /config` | 运行时配置读写 |
 
-## 6. 前端（Console 插件页面 `/plugin/agent-trace`）
+## 6. 前端（Console 插件页面 `/plugin/agent-trace` + 聊天页停靠面板）
 
 - **时间线**（dsh 原样移植）：三泳道 Input/Model/Tools、四投影模式（顺序/时长压缩空闲/时刻/实际墙钟）、拖选聚焦、滚轮缩放、右拖平移、TTFT→解码双色渐变、turn 分界线、tooltip、加载更早
-- **台账**：请求分组 pill（状态+时长+事件数+折叠）、行级 `R2 #15` 归属标记、kind 图标、行内工具结果、错误红显、搜索变暗、工具调用独立折叠开关；**>150 行启用 react-virtual 窗口化**
+- **台账**：请求分组 pill（状态+时长+事件数+折叠）、行级 `R2 #15` 归属标记、kind 图标、行内工具结果、错误红显、搜索变暗、工具调用独立折叠开关；**>150 行启用 react-virtual 窗口化
 - **检查器**（可拖宽度）三视图：单记录（Summary 含 Status/Payload/Result 分标签/Timing 含 TTFT·解码·吞吐/Usage 含 cache/Raw 原始事件 JSON）、整请求（Summary/Usage 本请求 vs 会话累计双列/Options 模型参数/Timing）、header（Summary/行级 LCS Diff 带上下文折叠/Prompt 全文/Tools schema 折叠）
 - **其他**：复制按钮 + JSON 语法高亮、主题跟随 Console（useTheme）、会话列表相对时间 + 自动轮询 + 加载更多、子代理跳转、`?session=` 深链
+- **聊天页轨迹入口**（v0.3.0，纯插件零宿主改动）：`chat.rightHeader.add` 注册 🧭 按钮，点击**直接跳转轨迹页并深链选中当前会话**（`?session=`，自动携带 `/console` basename）；TracePage 抽出共享 `SessionTraceView`；旧宿主无 chat API 时静默降级为仅独立页面
 - **构建守卫链**（`npm run build`）：宿主图标存在性 → 构建 → 裸模块说明符扫描 → 伪宿主冒烟导入（拦截全部两类历史加载崩溃）
 
 ## 7. 配置（`traces/config.json`，Console 设置弹层 / PUT /config）
@@ -128,6 +130,7 @@ runtime hooks (6个, PRE_DISPATCH→FINALLY)      AgentScope middleware
 | `7b697c65` | 会话列表读 chats.json 补 Console 会话标题/状态/agent |
 | `75c6b045` | 会话列表按 agent 分组折叠 |
 | `a31206c3` | 会话统计条 + 按需检查器（Kimi 协作） |
+| （v0.3.0） | **聊天页轨迹入口**：TracePage 抽出共享 `SessionTraceView`（+`uiShared`）；`chat.rightHeader.add` 注册 🧭 按钮点击即深链跳转当前会话轨迹页（携带 `/console` basename），零宿主改动，旧宿主静默降级 |
 | `53902f7b` | **宿主修复**：workspace 替换后补发 created 钩子——force 热更新不再断采集 |
 | （本次） | 审批补丁复核修复：包装 `create_pending_summary`（driver gate/harness/computer-use 路径）、`cancel_stale` superseded 事件、cancel_all 逐条落回子会话、身份校验式 restore 防 qwenpaw-pet 互踩、ask-run 映射容量上限；88 测试 |
 | （本次） | 台账可读性：入站报文**合并进 USER 行**（来源渠道/用户/多媒体部件，旧数据降级为可读独立行），出站报文改为一行**回执**（渠道 + 字数，不再重复回复正文） |
@@ -137,5 +140,5 @@ runtime hooks (6个, PRE_DISPATCH→FINALLY)      AgentScope middleware
 
 1. P2 生态项（可不对齐）：agent 自查工具（session_search/trace 挂给 agent）、feedback 评分关联、OTel 遥测外发
 2. 导出增强：ZIP 打包含子会话、HEAD 预检、批量
-3. 聊天页内嵌轨迹入口（需 Console 侧挂载点，深链 `?session=` 已就绪）
+3. ~~聊天页内嵌轨迹入口（需 Console 侧挂载点，深链 `?session=` 已就绪）~~ 已完成（v0.3.0，纯插件实现，见第 6 节）
 4. ~~上游 issue：force 热更新不断采集的钩子清理~~ 已修复（见第 8 节）；localhost bypass 范围收窄仍待上游

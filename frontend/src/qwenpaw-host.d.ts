@@ -10,6 +10,7 @@ declare global {
     useLocale?: () => string;
     useTheme?: () => "light" | "dark";
     fetch?: (path: string, init?: RequestInit) => Promise<Response>;
+    getCurrentSessionId?: () => string | null;
   }
 
   interface QwenPawRoute {
@@ -20,9 +21,20 @@ declare global {
     priority?: number;
   }
 
+  interface QwenPawChatNamespace {
+    rightHeader?: {
+      add?: (
+        pluginId: string,
+        node: ReactNS.ReactNode,
+        opts?: { id?: string; order?: number },
+      ) => unknown;
+    };
+  }
+
   interface QwenPawGlobal {
     host: QwenPawHost;
     registerRoutes?: (pluginId: string, routes: QwenPawRoute[]) => void;
+    chat?: QwenPawChatNamespace;
   }
 
   interface Window {

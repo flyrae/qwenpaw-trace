@@ -52,6 +52,7 @@ class TraceService:
         self._cleanup_task: Optional["asyncio.Task"] = None
         self._titles_stamp: Optional[tuple] = None
         self._titles_cache: Optional[dict] = None
+        self._chat_id_index: Optional[dict] = None
         # Last recorded request-header sha per session, so unchanged
         # prompts are not re-recorded on every model call.
         self._header_sha_by_session: dict = {}
@@ -69,9 +70,7 @@ class TraceService:
             )
         return sanitize_payload(
             data,
-            limit=self.config.max_payload_chars
-            if limit is None
-            else limit,
+            limit=self.config.max_payload_chars if limit is None else limit,
             patterns=self._patterns,
         )
 
@@ -167,6 +166,7 @@ class TraceService:
         if stamp == self._titles_stamp and self._titles_cache is not None:
             return self._titles_cache
         titles: dict = {}
+        chat_ids: dict = {}
         for path in files:
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
@@ -183,6 +183,14 @@ class TraceService:
                 session_id = item.get("session_id")
                 if not isinstance(session_id, str) or not session_id:
                     continue
+                # Local chat id (Console library id) → backend session id.
+                chat_local_id = item.get("id")
+                if (
+                    isinstance(chat_local_id, str)
+                    and chat_local_id
+                    and chat_local_id != session_id
+                ):
+                    chat_ids.setdefault(chat_local_id, session_id)
                 # First workspace wins; traces are keyed by session_id
                 # and duplicates across agents are rare.
                 titles.setdefault(
@@ -197,7 +205,27 @@ class TraceService:
                 )
         self._titles_stamp = stamp
         self._titles_cache = titles
+        self._chat_id_index = chat_ids
         return titles
+
+    def resolve_chat_session(self, chat_id: str) -> Optional[str]:
+        """Map a Console chat id to its backend trace session id.
+
+        The Console's session library addresses chats by local ids
+        (``<timestamp>-<rand>``) whose ``realId``/``session_id`` mapping
+        only lives in each workspace's ``chats.json``. Accepts either
+        form: a local chat id resolves through the index; a backend
+        session id (a trace file exists) resolves to itself.
+        """
+        titles = self._chat_titles()
+        if self._chat_id_index is None:
+            return None
+        mapped = self._chat_id_index.get(chat_id)
+        if mapped:
+            return mapped
+        if titles.get(chat_id) or self.store.session_path(chat_id).exists():
+            return chat_id
+        return None
 
     async def shutdown(self) -> None:
         """Stop the flush task after draining buffered events."""

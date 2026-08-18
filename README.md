@@ -74,6 +74,17 @@ session on the left; the right side is the trajectory view:
 
 The recording switches live in the page's settings popover.
 
+### Chat-header quick jump
+
+A 🧭 button in the chat header jumps straight to the trace page with
+the **current conversation preselected** (`/plugin/agent-trace?session=…`,
+deep link). Console-local chat ids are first resolved to backend trace
+session ids via `GET /agent-trace/resolve` (chats.json index); a session
+without trace data yet shows a friendly empty state. The link keeps the
+`/console` router basename the host may serve under. On hosts without
+the chat extension API the button silently doesn't register — the
+standalone page keeps working.
+
 ## REST API
 
 Mounted at `/api/agent-trace`:
@@ -82,6 +93,7 @@ Mounted at `/api/agent-trace`:
 | -------- | ------------------------------- | ------------------------------ |
 | `GET`    | `/sessions`                     | list session summaries         |
 | `GET`    | `/sessions/{id}?before_seq=&limit=` | read an event window       |
+| `GET`    | `/resolve?chat_id=`             | Console chat id → trace session id |
 | `GET`    | `/sessions/{id}/export`         | download the raw JSONL         |
 | `DELETE` | `/sessions/{id}`                | delete a session's trace       |
 | `GET`/`PUT` | `/config`                    | read / update runtime config  |
