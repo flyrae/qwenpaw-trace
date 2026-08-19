@@ -39,10 +39,10 @@ runtime hooks (6个, PRE_DISPATCH→FINALLY)      AgentScope middleware
 | `message/inbound` | PRE_EXECUTE(15)，run 开启后 | 类型化 content parts（text/image/video/file）+ channel_meta 摘要 |
 | `run/start` | PRE_EXECUTE(14) | query、输入消息摘要、trigger、channel；子代理运行附 `root_session_id`/`root_agent_id` |
 | `llm/header` | 首次及每次变更 | sha256 内容哈希、`prev_sha256` 链、系统提示词全文（独立 200k 上限）、工具名列表 + **完整 schema** |
-| `llm/call` | 每次模型调用 | model、messages 摘要（每条截 200 字符）、**options 参数摘要**（temperature/top_p/max_tokens/stream…） |
+| `llm/call` | 每次模型调用 | model、messages 摘要（每条截 200 字符）、**messages_meta 尺寸记账**（按 role 聚合的字符/条数 + 最大工具消息，只记数字不存内容，v0.3.1）、**messages_new 增量输入**（相对上次调用新增的消息内容，截断+脱敏——工具轮后即"工具结果如何进入模型输入"的通路；前缀变化时 context_reset 全量重记，v0.3.2）、**options 参数摘要**（temperature/top_p/max_tokens/stream…） |
 | `llm/result` | 调用结束 | 输出全文、thinking、模型发出的 tool_calls、usage（含 cache read/write）、`timing`（TTFT/解码时长，流式）、错误 |
 | `tool/call` | on_acting 进入 | 工具名、原始入参、tool_call_id |
-| `tool/result` | 完成/异常/GeneratorExit | 输出、耗时、错误、note（提前关闭标注） |
+| `tool/result` | 完成/异常/GeneratorExit | 输出、耗时、错误、note（提前关闭标注）、**output_chars/output_bytes（截断前完整大小，v0.3.1）** |
 | `approval/asked` | ApprovalService.create_pending **及 create_pending_summary** 补丁 | 工具名、severity、findings、摘要、`source_type`（tool_guard / driver_policy / harness / 插件）；**归属当前活跃 run** |
 | `approval/decided` | resolve_request / cancel_stale / cancel_all 补丁 | approved/denied/timed_out/cancelled/**superseded** + scope；asked 时记住 run 映射（上限 1024，FIFO 逐出），跨会话决策也落回原 run；批量取消**逐条落回各自会话文件** |
 | `agent/spawn` | 子代理 run 开启时写入**根会话**文件 | child_session_id / child_agent_id / child_trace_id |
@@ -135,6 +135,12 @@ runtime hooks (6个, PRE_DISPATCH→FINALLY)      AgentScope middleware
 | （本次） | 审批补丁复核修复：包装 `create_pending_summary`（driver gate/harness/computer-use 路径）、`cancel_stale` superseded 事件、cancel_all 逐条落回子会话、身份校验式 restore 防 qwenpaw-pet 互踩、ask-run 映射容量上限；88 测试 |
 | （本次） | 台账可读性：入站报文**合并进 USER 行**（来源渠道/用户/多媒体部件，旧数据降级为可读独立行），出站报文改为一行**回执**（渠道 + 字数，不再重复回复正文） |
 | （本次） | 标记行细分：审批（🛡盾牌/volcano）、回执（📤发送/cyan）、子代理（🚀火箭/geekblue）、提示词（📄文档/green）、错误（⭕红）各有专属标签与图标，不再共用"标记"；Inspector Kind 字段同步 |
+| （v0.3.6） | **技能归属（时间推断）**：run 内技能激活（斜杠注入/Skill 加载）后的普通工具调用标 `∈技能`（浅蓝，悬停注明依据：斜杠指定=高置信 / 加载后执行=推断），run 结束即清（run/start 亦防御性清空，崩溃缺 run/end 的 run 不泄漏归属）；检查器新增「技能归属」行；与 ⚡（直接触碰技能资源=事实）区分置信度 |
+| （v0.3.5） | **斜杠命令技能通路**：`/skill` 命令把整个 `<skill>` 块内联进 run/start 的 query（第三条披露路径）——前端解析后用户行显示 `/xlsx` 标签、计入请求 pill 的 skillsUsed 与 loadedSkills；后端 `_slash_skill_name` 在两处折叠中聚合进 skills 统计；真实会话实测四处呈现通过 |
+| （v0.3.4） | **第 3 层技能资源归因**：从 header `<agent-skills>` 提取技能目录映射（跨 run 持久），工具调用输入含技能目录路径即标 `⚡技能名`——**已加载后使用（geekblue）vs 未加载直接使用（orange 旁路）**按事件序判定；统计条汇总 `⚡ 未加载即执行`；纯前端零采集改动 |
+| （v0.3.3） | **技能观测**：`Skill` 工具调用聚合为 `skills {name: count}`（列表/stats 端点）；台账技能行（geekblue 📚 + 已加载大小，不再显示 JSON 原文与正文预览）、请求 pill 📚 角标、会话列表/统计条技能段；95 测试 |
+| （v0.3.2） | **增量输入可观测**：`messages_new` 记录每次调用相对上次新增的输入消息（内容截断+脱敏、带 tool_call_id），指纹公共前缀对比、前缀变化（压缩/重写）触发 `context_reset` 全量重记；助手记录检查器新增**「输入」页**（新增消息列表 + 输入总量 + reset 警告）——回答"工具输出怎么进入模型"；94 测试 |
+| （v0.3.1） | **输入/信息量归因**：`llm/call.messages_meta` 按 role 聚合字符记账（不存内容，固定大小）；`tool/result.output_chars/output_bytes` 记录截断前完整大小；请求检查器 Usage 页新增**输入构成四桶**（system/user/assistant/tool，字符→token 按模型系数估算并标注）、**最大单条工具消息**、**跨轮输入增量对账**（input[n]−input[n−1]，配合缓存命中显示增量被吸收情况）；工具记录 Summary 显示截断前输出大小；91 测试 |
 
 ## 11. 后续路线（未做，按价值排序）
 

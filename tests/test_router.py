@@ -63,6 +63,22 @@ async def seed_session(service, session_id="sess-1"):
     await service.store.flush()
 
 
+async def seed_skill_load(service, session_id="sess-1", skill="browser-zh"):
+    service.store.append(
+        session_id,
+        "tool/call",
+        "r1",
+        {"name": "Skill", "input": json.dumps({"skill": skill})},
+    )
+    service.store.append(
+        session_id,
+        "tool/result",
+        "r1",
+        {"ok": True, "duration_ms": 4, "output": "# skill body"},
+    )
+    await service.store.flush()
+
+
 class TestSessions:
     async def test_list_empty(self, client):
         response = await client.get("/agent-trace/sessions")
@@ -71,6 +87,53 @@ class TestSessions:
         assert body["sessions"] == []
         assert body["total"] == 0
         assert body["has_more"] is False
+
+    async def test_skill_loads_aggregated(self, client, service):
+        await seed_session(service)
+        await seed_skill_load(service, skill="browser-zh")
+        await seed_skill_load(service, skill="browser-zh")
+        await seed_skill_load(service, skill="pdf")
+        # A non-skill tool call must not be counted.
+        service.store.append(
+            "sess-1",
+            "tool/call",
+            "r1",
+            {"name": "execute_shell_command", "input": '{"cmd":"dir"}'},
+        )
+        # Slash-command invocation inlines the skill block into the query.
+        service.store.append(
+            "sess-1",
+            "run/start",
+            "r2",
+            {
+                "query": (
+                    "/xlsx 查看这个excel\n\n<skill>\n<name>xlsx</name>\n"
+                    "<description>Sheets.</description>\n</skill>\n"
+                ),
+            },
+        )
+        service.store.append(
+            "sess-1",
+            "run/end",
+            "r2",
+            {"status": "success"},
+        )
+        await service.store.flush()
+
+        response = await client.get("/agent-trace/sessions")
+        summary = response.json()["sessions"][0]
+        assert summary["skills"] == {
+            "browser-zh": 2,
+            "pdf": 1,
+            "xlsx": 1,
+        }
+
+        response = await client.get("/agent-trace/sessions/sess-1/stats")
+        assert response.json()["skills"] == {
+            "browser-zh": 2,
+            "pdf": 1,
+            "xlsx": 1,
+        }
 
     async def test_list_pagination(self, client, service):
         for index in range(3):

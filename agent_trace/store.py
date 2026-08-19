@@ -29,6 +29,7 @@ from .events import (
     EVENT_LLM_RESULT,
     EVENT_RUN_END,
     EVENT_RUN_START,
+    EVENT_TOOL_CALL,
     EVENT_TOOL_RESULT,
     make_event,
 )
@@ -343,9 +344,7 @@ class TraceStore:
             return None
         header: Optional[Dict[str, Any]] = None
         total = 0
-        window: deque = (
-            deque(maxlen=limit) if limit and limit > 0 else deque()
-        )
+        window: deque = deque(maxlen=limit) if limit and limit > 0 else deque()
         try:
             with open(path, encoding="utf-8") as handle:
                 for line in handle:
@@ -428,6 +427,7 @@ class TraceStore:
             "cache_write_tokens": 0,
             "total_tokens": 0,
             "models": {},
+            "skills": {},
             "first_event_t": None,
             "last_event_t": None,
         }
@@ -442,9 +442,20 @@ class TraceStore:
             stats["last_event_t"] = event.get("t")
             if event_type == EVENT_RUN_START:
                 stats["runs"] += 1
+                slash_skill = _slash_skill_name(data)
+                if slash_skill:
+                    stats["skills"][slash_skill] = (
+                        stats["skills"].get(slash_skill, 0) + 1
+                    )
             elif event_type == EVENT_RUN_END:
                 if data.get("status") == "error":
                     stats["errors"] += 1
+            elif event_type == EVENT_TOOL_CALL:
+                skill_name = _skill_load_name(data)
+                if skill_name:
+                    stats["skills"][skill_name] = (
+                        stats["skills"].get(skill_name, 0) + 1
+                    )
             elif event_type == EVENT_LLM_RESULT:
                 stats["llm_calls"] += 1
                 stats["llm_ms_total"] += _num(data.get("duration_ms"))
@@ -490,9 +501,7 @@ class TraceStore:
                 stats["tool_ms_total"] += _num(data.get("duration_ms"))
                 if data.get("ok") is False or data.get("error"):
                     stats["errors"] += 1
-        stats["total_tokens"] = (
-            stats["input_tokens"] + stats["output_tokens"]
-        )
+        stats["total_tokens"] = stats["input_tokens"] + stats["output_tokens"]
         stats["ttft_ms_avg"] = (
             stats["ttft_ms_sum"] / ttft_count if ttft_count else None
         )
@@ -545,6 +554,7 @@ class TraceStore:
         llm_calls = 0
         tool_calls = 0
         total_tokens = 0
+        skills: Dict[str, int] = {}
         open_runs: set = set()
         last_status = "unknown"
         last_event_t: Optional[str] = None
@@ -575,6 +585,11 @@ class TraceStore:
                         runs += 1
                         if run_id:
                             open_runs.add(run_id)
+                        slash_skill = _slash_skill_name(data)
+                        if slash_skill:
+                            skills[slash_skill] = (
+                                skills.get(slash_skill, 0) + 1
+                            )
                     elif event_type == EVENT_RUN_END:
                         if run_id:
                             open_runs.discard(run_id)
@@ -588,6 +603,10 @@ class TraceStore:
                         total_tokens += _usage_tokens(data)
                     elif event_type == EVENT_TOOL_RESULT:
                         tool_calls += 1
+                    elif event_type == EVENT_TOOL_CALL:
+                        skill_name = _skill_load_name(data)
+                        if skill_name:
+                            skills[skill_name] = skills.get(skill_name, 0) + 1
         except OSError:
             return None
         if header is None and runs == 0:
@@ -611,6 +630,7 @@ class TraceStore:
             "total_tokens": total_tokens,
             "status": status,
             "size_bytes": stat.st_size,
+            **({"skills": skills} if skills else {}),
         }
 
     # ------------------------------------------------------------------
@@ -715,6 +735,52 @@ def _unlink(path: Path) -> bool:
         return True
     except OSError:
         return False
+
+
+def _skill_load_name(data: Any) -> Optional[str]:
+    """Skill name from a ``tool/call`` payload of the builtin Skill
+    viewer tool (``{"name": "Skill", "input": {"skill": ...}}``)."""
+    if not isinstance(data, dict) or data.get("name") != "Skill":
+        return None
+    raw = data.get("input")
+    if isinstance(raw, dict):
+        name = raw.get("skill")
+        return name if isinstance(name, str) and name else None
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return None
+        if isinstance(parsed, dict):
+            name = parsed.get("skill")
+            return name if isinstance(name, str) and name else None
+    return None
+
+
+_SLASH_SKILL_RE = re.compile(r"<skill>\s*<name>([^<]+)</name>")
+
+
+def _slash_skill_name(data: Any) -> Optional[str]:
+    """Skill inlined into a ``run/start`` payload by a slash command
+    (the whole ``<skill>`` block is embedded into the query)."""
+    if not isinstance(data, dict):
+        return None
+    texts: List[str] = []
+    query = data.get("query")
+    if isinstance(query, str):
+        texts.append(query)
+    messages = data.get("messages")
+    if isinstance(messages, list) and messages:
+        first = messages[0]
+        if isinstance(first, dict):
+            text = first.get("text")
+            if isinstance(text, str):
+                texts.append(text)
+    for text in texts:
+        match = _SLASH_SKILL_RE.search(text)
+        if match:
+            return match.group(1).strip()
+    return None
 
 
 def _usage_tokens(data: Any) -> int:

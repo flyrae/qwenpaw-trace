@@ -56,6 +56,11 @@ class TraceService:
         # Last recorded request-header sha per session, so unchanged
         # prompts are not re-recorded on every model call.
         self._header_sha_by_session: dict = {}
+        # Per-message fingerprints of each session's last model-call
+        # input, so the next call only records the appended messages
+        # (how tool results enter the model input stays observable
+        # without re-storing the whole context every call).
+        self._llm_input_fingerprints: dict = {}
 
     @property
     def enabled(self) -> bool:
@@ -81,6 +86,31 @@ class TraceService:
     def set_last_header_sha(self, session_id: str, sha: str) -> None:
         """Record the sha of the most recent header event."""
         self._header_sha_by_session[session_id] = sha
+
+    def llm_input_delta(
+        self,
+        session_id: str,
+        fingerprints: List[str],
+    ) -> "tuple[int, bool]":
+        """Longest-common-prefix bookkeeping for call inputs.
+
+        Returns ``(start_index, reset)``: messages from ``start_index``
+        onward are new since this session's previous model call. A
+        changed prefix (context compaction / rewrite) returns
+        ``(0, True)`` so the full input is re-recorded once.
+        """
+        previous = self._llm_input_fingerprints.get(session_id)
+        self._llm_input_fingerprints[session_id] = fingerprints
+        if not previous:
+            return 0, False
+        common = 0
+        for old, new in zip(previous, fingerprints):
+            if old != new:
+                break
+            common += 1
+        if common == len(previous):
+            return common, False
+        return 0, True
 
     def invalidate_patterns(self) -> None:
         """Recompile redaction patterns after a config change."""
@@ -118,6 +148,7 @@ class TraceService:
         removed = await asyncio.to_thread(self.store.cleanup)
         for session_id in removed:
             self._header_sha_by_session.pop(session_id, None)
+            self._llm_input_fingerprints.pop(session_id, None)
         if removed:
             logger.info(
                 "agent-trace: retention cleanup removed %d session "
@@ -239,6 +270,7 @@ class TraceService:
         deleted = await self.store.delete_session(session_id)
         if deleted:
             self._header_sha_by_session.pop(session_id, None)
+            self._llm_input_fingerprints.pop(session_id, None)
         return deleted
 
     def save_config(self) -> None:

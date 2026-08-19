@@ -12,16 +12,6 @@ table, and a record inspector.
 > [DESIGN.md](./DESIGN.md)（Full architecture, event model, API,
 > limitations, and history: see [DESIGN.md](./DESIGN.md)).
 
-## Screenshots / 截图
-
-**轨迹总览** — 会话分组列表、统计条、三泳道时间线与台账:
-
-![Trajectory overview: session list, stats strip, three-lane timeline and ledger](docs/images/overview.png)
-
-**记录检查器** — 单条记录的摘要 / 输入输出 / Timing / Usage / Raw:
-
-![Record inspector: summary, IO, timing, usage and raw tabs](docs/images/inspector.png)
-
 ## Attribution
 
 The timeline projection algorithm (`frontend/src/trajectory/timeline.ts`),
@@ -42,10 +32,10 @@ The first line is a session header; every following line is one event:
 | `run/end`     | status (`success` / `error` / `cancelled` / `interrupted`), duration, error text |
 | `agent/spawn` | sub-agent pointer written into the root session's trace (`child_session_id` / `child_agent_id` / `child_trace_id`) |
 | `llm/header`  | system-prompt snapshot — recorded once per content change (sha-keyed, `prev_sha256` link, full prompt + tools catalog + full tool schemas) |
-| `llm/call`    | model, message count, input message digest                       |
+| `llm/call`    | model, message count, input message digest, `messages_meta` size accounting (chars/counts aggregated per role — numbers only, no content), `messages_new` (messages appended since the previous call, content truncated + redacted — after a tool round this shows how tool results enter the model input; `context_reset` marks a rewritten prefix) |
 | `llm/result`  | model, duration, output text, thinking, tool calls the model emitted, token usage (incl. cache read/write), `timing` (`ttft_ms` / `decode_ms`, streaming calls), error |
-| `tool/call`   | tool name, raw input, tool call id                               |
-| `tool/result` | ok, duration, output, error, tool call id                        |
+| `tool/call`   | tool name, raw input, tool call id                                |
+| `tool/result` | ok, duration, output, error, tool call id, `output_chars`/`output_bytes` (full size before truncation) |
 
 Events are written through an in-memory buffer flushed on a 200 ms
 coalescing window, so the agent loop never blocks on disk IO. Capture is
@@ -80,9 +70,26 @@ session on the left; the right side is the trajectory view:
   (Summary / contents / Timing (Started, Total, TTFT, Decoding,
   throughput) / Usage), a whole request (Summary / Usage / Timing), or a
   request header (Summary / line-level Diff against the previous
-  version with context collapsing / full Prompt / Tools catalog).
+  version with context collapsing / full Prompt / Tools catalog). The
+  request Usage tab also decomposes the input into role buckets
+  (system / user / assistant / tool) from size-only capture with
+  per-model chars→tokens estimates, tracks the largest single tool
+  message, and reconciles billed-input growth against the previous
+  round (with the cache-absorbed share); tool records show their
+  pre-truncation output size.
 
 The recording switches live in the page's settings popover.
+
+### Skill observability
+
+Skills are prompt-level progressive disclosure, so the viewer marks the
+two observable layers: `Skill` tool loads render as geekblue rows
+(📚 name + loaded size) with per-request / per-session usage badges, and
+tool calls that touch a skill's resources (the skill dir path appears
+in the command — `cd {skill_dir} && python scripts/...`) carry a ⚡ tag:
+geekblue when that skill was loaded first, **orange when it was used
+without loading the instructions** (bypass) — the session stats strip
+summarizes bypassed skills as `⚡ 未加载即执行: name`.
 
 ### Chat-header quick jump
 
