@@ -15,6 +15,8 @@ import type {
   TrajectoryTurnModel,
 } from "./records";
 import { formatDurationMillis } from "./records";
+import { spanEndT } from "./skillSpans";
+import type { SkillSpan, SkillSpanTrigger } from "./skillSpans";
 
 /** Horizontal projection used by the trajectory timeline. */
 export type TrajectoryTimelineMode =
@@ -195,6 +197,130 @@ function deriveTimedTimeline(
     end: Math.max(...spans.map((span) => span.end)),
     spans,
     turnBoundaries,
+  };
+}
+
+/** One skill execution span projected into the active timeline domain. */
+export interface TrajectoryTimelineSkillBand extends TrajectoryTimeRange {
+  spanId: string;
+  skill: string;
+  hue: number;
+  bypass: boolean;
+  trigger: SkillSpanTrigger;
+  open: boolean;
+}
+
+/**
+ * Project skill execution spans into the SAME domain the overview
+ * uses, so the band strip aligns with the record lanes under every
+ * projection mode.
+ */
+export function deriveSkillBands(
+  turns: readonly TrajectoryTurnModel[],
+  mode: TrajectoryTimelineMode = "sequence",
+): TrajectoryTimelineSkillBand[] | null {
+  const spansOf = (turn: TrajectoryTurnModel): SkillSpan[] =>
+    turn.skillSpans ?? [];
+  if (turns.every((turn) => spansOf(turn).length === 0)) return null;
+
+  if (mode === "sequence") {
+    const positionByIndex = new Map<number, number>();
+    let position = 0;
+    for (const turn of turns) {
+      for (const cell of turn.groups.flatMap((group) => group.cells)) {
+        positionByIndex.set(cell.index, position);
+        position += 1;
+      }
+    }
+    const bands: TrajectoryTimelineSkillBand[] = [];
+    for (const turn of turns) {
+      for (const span of spansOf(turn)) {
+        const positions = span.attributedIndexes
+          .map((idx) => positionByIndex.get(idx))
+          .filter((pos): pos is number => pos !== undefined);
+        let anchor: number | undefined = positions.length
+          ? Math.min(...positions)
+          : undefined;
+        if (anchor === undefined) {
+          // Load-only span: anchor at its loading/user row.
+          const anchorCell = turn.groups
+            .flatMap((group) => group.cells)
+            .find(
+              (cell) => cell.kind !== "system" && cell.skillName === span.skill,
+            );
+          anchor = anchorCell
+            ? positionByIndex.get(anchorCell.index)
+            : undefined;
+        }
+        if (anchor === undefined) continue;
+        const last = positions.length ? Math.max(...positions) : anchor;
+        bands.push(bandOf(span, anchor, last + 1));
+      }
+    }
+    return bands;
+  }
+
+  // Timed modes: epoch-ms bands pushed through the same idle
+  // compression as the record spans.
+  const recordSpans = turns.flatMap((turn) =>
+    turn.groups.flatMap((group) =>
+      group.cells.flatMap((cell) => {
+        const range = cellRange(cell);
+        return range === null ? [] : [range];
+      }),
+    ),
+  );
+  recordSpans.sort((a, b) => a.start - b.start || a.end - b.end);
+  const compressIdle = mode === "duration";
+  const idleOffsetAt = (time: number): number => {
+    // Offsets accumulate over gaps strictly before `time`; walk the
+    // span progression (recordSpans is small).
+    let offset = 0;
+    let covered: number | null = null;
+    for (const span of recordSpans) {
+      if (span.start >= time) break;
+      if (compressIdle && covered !== null && span.start > covered) {
+        const gapEnd = Math.min(span.start, time);
+        if (gapEnd > covered) offset += gapEnd - covered;
+      }
+      covered = covered === null ? span.end : Math.max(covered, span.end);
+    }
+    return offset;
+  };
+
+  const bands: TrajectoryTimelineSkillBand[] = [];
+  for (const turn of turns) {
+    for (const span of spansOf(turn)) {
+      const start = span.startT;
+      const end = Math.max(spanEndT(span), start + 1);
+      const offset = idleOffsetAt(start);
+      const endOffset = idleOffsetAt(end);
+      bands.push(
+        bandOf(
+          span,
+          start - offset,
+          Math.max(start - offset + 1, end - endOffset),
+        ),
+      );
+    }
+  }
+  return bands;
+}
+
+function bandOf(
+  span: SkillSpan,
+  start: number,
+  end: number,
+): TrajectoryTimelineSkillBand {
+  return {
+    spanId: span.id,
+    skill: span.skill,
+    hue: span.colorHue,
+    bypass: span.bypass,
+    trigger: span.trigger,
+    open: span.endKind === null,
+    start,
+    end,
   };
 }
 

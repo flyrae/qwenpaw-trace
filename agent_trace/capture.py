@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from inspect import isasyncgen
@@ -386,6 +387,44 @@ def _new_input_messages(messages: Any, start: int, limit: int) -> list:
     return entries
 
 
+_SLASH_SKILL_RE = re.compile(r"<skill>\s*<name>([^<]+)</name>")
+
+
+def _slash_skill(query: str) -> Optional[str]:
+    """Skill name inlined into a run's query by a slash command."""
+    if not query:
+        return None
+    match = _SLASH_SKILL_RE.search(query)
+    return match.group(1).strip() if match else None
+
+
+_SKILL_DIR_RE = re.compile(
+    r"<skill>\s*<name>([^<]+)</name>[\s\S]*?<dir>([^<]+)</dir>",
+)
+
+
+def _skill_dirs_from_prompt(messages: Any) -> list:
+    """[name, normalized_dir] pairs from an <agent-skills> section."""
+    dirs = []
+    for match in _SKILL_DIR_RE.finditer(_system_prompt(messages) or ""):
+        normalized = re.sub(r"[/\\]+", "/", match.group(2)).lower()
+        if normalized:
+            dirs.append([match.group(1).strip(), normalized])
+    dirs.sort(key=lambda item: len(item[1]), reverse=True)
+    return dirs
+
+
+def _matches_skill_dir(tool_input: str, dirs: list) -> Optional[str]:
+    """Skill name whose directory path appears in the tool input."""
+    if not tool_input or not dirs:
+        return None
+    normalized = re.sub(r"[/\\]+", "/", tool_input).lower()
+    for name, directory in dirs:
+        if directory in normalized:
+            return name
+    return None
+
+
 def _messages_meta(messages: Any) -> dict:
     """Size-only accounting of the input messages of a model call.
 
@@ -652,6 +691,11 @@ class AgentTraceRunStartHook(HookBase):
         input_count = len(list(ctx.input_msgs or []))
         root_session_id = ctx.root_session_id or ""
         root_agent_id = ctx.root_agent_id or ""
+        query_text = _last_user_text(ctx.input_msgs)
+        slash_skill = _slash_skill(query_text)
+        trigger = _request_trigger(request)
+        if not trigger and slash_skill:
+            trigger = "skill_command"
         _safe_append(
             run,
             ev.EVENT_RUN_START,
@@ -659,8 +703,9 @@ class AgentTraceRunStartHook(HookBase):
                 "trace_id": run.trace_id,
                 "agent_id": run.agent_id,
                 "channel": run.channel,
-                "trigger": _request_trigger(request),
-                "query": _last_user_text(ctx.input_msgs),
+                "trigger": trigger,
+                "query": query_text,
+                **({"slash_skill": slash_skill} if slash_skill else {}),
                 "input_msgs_count": input_count,
                 "messages": _messages_digest(ctx.input_msgs),
                 **(
@@ -923,9 +968,11 @@ def _llm_call_payload(
     the whole context on every call. A changed prefix (compaction /
     rewrite) re-records the full input once with ``context_reset``.
     """
-    start, reset = service.llm_input_delta(
+    roles = [_msg_parts(msg)[0] for msg in messages]
+    start, reset, tail_update = service.llm_input_delta(
         session_id,
         _message_fingerprints(messages),
+        roles,
     )
     payload = {
         "model": model_hint,
@@ -943,13 +990,36 @@ def _llm_call_payload(
     }
     if reset:
         payload["context_reset"] = True
+    if tail_update:
+        payload["tail_update"] = True
     return payload
+
+
+def _skill_output_extras(tool_name: str, content: Any) -> dict:
+    """Extra payload fields for a tool result (skill content sha)."""
+    if tool_name != "Skill":
+        return {}
+    text = _block_texts(content)
+    if not text:
+        return {}
+    return {
+        "skill_sha": hashlib.sha256(
+            text.encode("utf-8", "replace"),
+        ).hexdigest()[:16],
+    }
 
 
 def _emit_llm_call(run: Any, service: Any, agent: Any, input_kwargs: dict):
     """Record the header (on change) + one llm/call event; return the
     model name hint for the result event."""
     messages = list(input_kwargs.get("messages") or [])
+    try:
+        service.set_skill_dirs(
+            run.session_id,
+            _skill_dirs_from_prompt(messages),
+        )
+    except Exception:  # pylint: disable=broad-except
+        logger.debug("agent-trace: skill dir parse failed", exc_info=True)
     _maybe_record_header(
         run,
         service,
@@ -1115,6 +1185,10 @@ class TraceMiddleware(MiddlewareBase):
             tool_input = (
                 raw_input if isinstance(raw_input, str) else str(raw_input)
             )
+        skill_resource = _matches_skill_dir(
+            tool_input,
+            service.skill_dirs(run.session_id),
+        )
         _safe_append(
             run,
             ev.EVENT_TOOL_CALL,
@@ -1122,6 +1196,11 @@ class TraceMiddleware(MiddlewareBase):
                 "name": tool_name,
                 "input": tool_input,
                 "tool_call_id": getattr(tool_call, "id", None),
+                **(
+                    {"skill_resource": skill_resource}
+                    if skill_resource
+                    else {}
+                ),
             },
         )
         start = time.perf_counter()
@@ -1146,6 +1225,10 @@ class TraceMiddleware(MiddlewareBase):
                         getattr(final_response, "content", None),
                     ),
                     **_output_size_meta(
+                        getattr(final_response, "content", None),
+                    ),
+                    **_skill_output_extras(
+                        tool_name,
                         getattr(final_response, "content", None),
                     ),
                     "tool_call_id": getattr(tool_call, "id", None),
@@ -1179,6 +1262,10 @@ class TraceMiddleware(MiddlewareBase):
                     getattr(final_response, "content", None),
                 ),
                 **_output_size_meta(
+                    getattr(final_response, "content", None),
+                ),
+                **_skill_output_extras(
+                    tool_name,
                     getattr(final_response, "content", None),
                 ),
                 "tool_call_id": getattr(tool_call, "id", None),

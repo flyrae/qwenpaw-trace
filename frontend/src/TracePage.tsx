@@ -154,6 +154,22 @@ function SessionGroups({
                         {item.runs} {t(locale as never, "runs")}
                       </span>
                       <span>{formatCount(item.total_tokens)} tok</span>
+                      {item.skills ? (
+                        <span
+                          style={{ color: "#2f54eb" }}
+                          title={Object.entries(item.skills)
+                            .sort((a, b) => b[1] - a[1])
+                            .map(([name, count]) => `${name} ×${count}`)
+                            .join("\n")}
+                        >
+                          📚{" "}
+                          {Object.entries(item.skills)
+                            .sort((a, b) => b[1] - a[1])
+                            .slice(0, 2)
+                            .map(([name]) => name)
+                            .join(" ")}
+                        </span>
+                      ) : null}
                       <span
                         style={{ marginLeft: "auto" }}
                         title={formatTime(item.last_event_t)}

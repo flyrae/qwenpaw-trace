@@ -22,6 +22,8 @@ EVENT_APPROVAL_DECIDED = "approval/decided"
 EVENT_LLM_CALL = "llm/call"
 EVENT_LLM_RESULT = "llm/result"
 EVENT_LLM_HEADER = "llm/header"
+EVENT_LLM_API_REQUEST = "llm/api_request"
+EVENT_LLM_API_RESPONSE = "llm/api_response"
 EVENT_TOOL_CALL = "tool/call"
 EVENT_TOOL_RESULT = "tool/result"
 

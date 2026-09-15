@@ -135,6 +135,24 @@ class TestSessions:
             "xlsx": 1,
         }
 
+        # WP5: per-skill detail counters (loads / slash_runs /
+        # resource_calls).
+        detail = response.json()["skills_detail"]
+        assert detail["browser-zh"] == {
+            "loads": 2,
+            "slash_runs": 0,
+            "resource_calls": 0,
+        }
+        assert detail["xlsx"] == {
+            "loads": 0,
+            "slash_runs": 1,
+            "resource_calls": 0,
+        }
+        response = await client.get("/agent-trace/sessions")
+        summary_detail = response.json()["sessions"][0]["skills_detail"]
+        assert summary_detail["browser-zh"]["loads"] == 2
+        assert summary_detail["xlsx"]["slash_runs"] == 1
+
     async def test_list_pagination(self, client, service):
         for index in range(3):
             await seed_session(service, session_id=f"sess-{index}")

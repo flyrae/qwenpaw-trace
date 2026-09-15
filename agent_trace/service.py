@@ -61,6 +61,13 @@ class TraceService:
         # (how tool results enter the model input stays observable
         # without re-storing the whole context every call).
         self._llm_input_fingerprints: dict = {}
+        # Skill dir map per session (from the <agent-skills> prompt
+        # section), used to tag tool/call events with skill_resource.
+        self._skill_dirs_by_session: dict = {}
+        # Role list of each session's last model-call input — needed to
+        # distinguish a same-position tail replacement (role unchanged)
+        # from a prefix rewrite.
+        self._last_roles: dict = {}
 
     @property
     def enabled(self) -> bool:
@@ -91,26 +98,54 @@ class TraceService:
         self,
         session_id: str,
         fingerprints: List[str],
-    ) -> "tuple[int, bool]":
+        roles: Optional[List[str]] = None,
+    ) -> "tuple[int, bool, bool]":
         """Longest-common-prefix bookkeeping for call inputs.
 
-        Returns ``(start_index, reset)``: messages from ``start_index``
-        onward are new since this session's previous model call. A
-        changed prefix (context compaction / rewrite) returns
-        ``(0, True)`` so the full input is re-recorded once.
+        Returns ``(start_index, reset, tail_update)``: messages from
+        ``start_index`` onward are new since this session's previous
+        model call. Three outcomes:
+
+        - append: the previous list is a full prefix → record the tail;
+        - tail update: only the LAST previous message was replaced
+          (same role at the same position — the runtime rewrites the
+          trailing assistant message between ReAct steps) → record the
+          replacement only, ``tail_update`` is set, no reset;
+        - reset: the prefix itself changed (compaction / rewrite / a
+          hot-reload cache loss with a mid-list divergence) → re-record
+          the full input once with ``reset`` set.
         """
         previous = self._llm_input_fingerprints.get(session_id)
+        previous_roles = self._last_roles.get(session_id) or []
         self._llm_input_fingerprints[session_id] = fingerprints
+        self._last_roles[session_id] = list(roles or [])
         if not previous:
-            return 0, False
+            return 0, False, False
         common = 0
         for old, new in zip(previous, fingerprints):
             if old != new:
                 break
             common += 1
         if common == len(previous):
-            return common, False
-        return 0, True
+            return common, False, False
+        if (
+            common == len(previous) - 1
+            and common < len(fingerprints)
+            and roles is not None
+            and len(roles) > common
+            and len(previous_roles) > common
+            and roles[common] == previous_roles[common]
+        ):
+            return common, False, True
+        return 0, True, False
+
+    def set_skill_dirs(self, session_id: str, dirs: list) -> None:
+        """Cache the session's skill-dir map parsed from the prompt."""
+        self._skill_dirs_by_session[session_id] = dirs
+
+    def skill_dirs(self, session_id: str) -> list:
+        """Cached skill-dir map (possibly empty, never None)."""
+        return self._skill_dirs_by_session.get(session_id) or []
 
     def invalidate_patterns(self) -> None:
         """Recompile redaction patterns after a config change."""
@@ -149,6 +184,8 @@ class TraceService:
         for session_id in removed:
             self._header_sha_by_session.pop(session_id, None)
             self._llm_input_fingerprints.pop(session_id, None)
+            self._skill_dirs_by_session.pop(session_id, None)
+            self._last_roles.pop(session_id, None)
         if removed:
             logger.info(
                 "agent-trace: retention cleanup removed %d session "
@@ -271,6 +308,8 @@ class TraceService:
         if deleted:
             self._header_sha_by_session.pop(session_id, None)
             self._llm_input_fingerprints.pop(session_id, None)
+            self._skill_dirs_by_session.pop(session_id, None)
+            self._last_roles.pop(session_id, None)
         return deleted
 
     def save_config(self) -> None:

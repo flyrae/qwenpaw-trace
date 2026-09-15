@@ -428,6 +428,7 @@ class TraceStore:
             "total_tokens": 0,
             "models": {},
             "skills": {},
+            "skills_detail": {},
             "first_event_t": None,
             "last_event_t": None,
         }
@@ -447,6 +448,9 @@ class TraceStore:
                     stats["skills"][slash_skill] = (
                         stats["skills"].get(slash_skill, 0) + 1
                     )
+                    _detail(stats["skills_detail"], slash_skill)[
+                        "slash_runs"
+                    ] += 1
             elif event_type == EVENT_RUN_END:
                 if data.get("status") == "error":
                     stats["errors"] += 1
@@ -456,6 +460,12 @@ class TraceStore:
                     stats["skills"][skill_name] = (
                         stats["skills"].get(skill_name, 0) + 1
                     )
+                    _detail(stats["skills_detail"], skill_name)["loads"] += 1
+                resource = data.get("skill_resource")
+                if isinstance(resource, str) and resource:
+                    _detail(stats["skills_detail"], resource)[
+                        "resource_calls"
+                    ] += 1
             elif event_type == EVENT_LLM_RESULT:
                 stats["llm_calls"] += 1
                 stats["llm_ms_total"] += _num(data.get("duration_ms"))
@@ -555,6 +565,7 @@ class TraceStore:
         tool_calls = 0
         total_tokens = 0
         skills: Dict[str, int] = {}
+        skills_detail: Dict[str, Dict[str, int]] = {}
         open_runs: set = set()
         last_status = "unknown"
         last_event_t: Optional[str] = None
@@ -590,6 +601,10 @@ class TraceStore:
                             skills[slash_skill] = (
                                 skills.get(slash_skill, 0) + 1
                             )
+                            _detail(
+                                skills_detail,
+                                slash_skill,
+                            )["slash_runs"] += 1
                     elif event_type == EVENT_RUN_END:
                         if run_id:
                             open_runs.discard(run_id)
@@ -607,6 +622,12 @@ class TraceStore:
                         skill_name = _skill_load_name(data)
                         if skill_name:
                             skills[skill_name] = skills.get(skill_name, 0) + 1
+                            _detail(skills_detail, skill_name)["loads"] += 1
+                        resource = data.get("skill_resource")
+                        if isinstance(resource, str) and resource:
+                            _detail(skills_detail, resource)[
+                                "resource_calls"
+                            ] += 1
         except OSError:
             return None
         if header is None and runs == 0:
@@ -631,6 +652,7 @@ class TraceStore:
             "status": status,
             "size_bytes": stat.st_size,
             **({"skills": skills} if skills else {}),
+            **({"skills_detail": skills_detail} if skills_detail else {}),
         }
 
     # ------------------------------------------------------------------
@@ -755,6 +777,17 @@ def _skill_load_name(data: Any) -> Optional[str]:
             name = parsed.get("skill")
             return name if isinstance(name, str) and name else None
     return None
+
+
+def _detail(
+    detail: Dict[str, Dict[str, int]],
+    skill: str,
+) -> Dict[str, int]:
+    """Lazily create the per-skill detail counters."""
+    return detail.setdefault(
+        skill,
+        {"loads": 0, "slash_runs": 0, "resource_calls": 0},
+    )
 
 
 _SLASH_SKILL_RE = re.compile(r"<skill>\s*<name>([^<]+)</name>")

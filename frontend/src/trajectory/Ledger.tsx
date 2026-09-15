@@ -24,7 +24,7 @@ import { formatSeconds, formatTokens, recordKindLabel } from "./records";
 const host = window.QwenPaw.host;
 const React: typeof ReactNS = host.React;
 const { useRef } = React;
-const { Tag } = host.antd;
+const { Tag, Tooltip } = host.antd;
 const { Text } = host.antd.Typography;
 const {
   CaretRightOutlined,
@@ -152,6 +152,8 @@ export interface LedgerProps {
   onLoadOlder: () => void;
   initialRecord?: TrajectoryRecord | null;
   emptyText?: string;
+  /** Open the span inspector for a skill used in a request pill. */
+  onSkillSpanOpen?: (skill: string, turn: number | null) => void;
 }
 
 function RecordRow({
@@ -160,12 +162,14 @@ function RecordRow({
   dimmed,
   multiRequest,
   onSelect,
+  onOpenRun,
 }: {
   record: TrajectoryRecord;
   selected: boolean;
   dimmed: boolean;
   multiRequest: boolean;
   onSelect: () => void;
+  onOpenRun?: (runIndex: number) => void;
 }) {
   const usage = record.usage;
   const tokens =
@@ -174,6 +178,32 @@ function RecordRow({
           usage.output_tokens,
         )}`
       : null;
+  // dsh parity: reasoning tokens as a third inline metric, purple and
+  // tooltip-documented (Input N · Cached N · Output N (Reasoning N)).
+  const reasoning =
+    usage && usage.reasoning_tokens ? usage.reasoning_tokens : null;
+  const tokenTitle =
+    usage && tokens
+      ? [
+          `Input ${formatTokens(usage.input_tokens)} tok`,
+          usage.cache_input_tokens
+            ? `Cached ${formatTokens(usage.cache_input_tokens)} tok`
+            : null,
+          usage.cache_creation_input_tokens
+            ? `Cache created ${formatTokens(
+                usage.cache_creation_input_tokens,
+              )} tok`
+            : null,
+          `Output ${formatTokens(usage.output_tokens)} tok`,
+          reasoning
+            ? `${t(storedLocale(), "reasoningShort")} ${formatTokens(
+                reasoning,
+              )} tok`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : undefined;
   return (
     <div
       className="at-ledger-row"
@@ -191,6 +221,14 @@ function RecordRow({
         cursor: "pointer",
         background: selected ? "rgba(22,119,255,0.08)" : undefined,
         opacity: dimmed ? 0.35 : 1,
+        borderLeft:
+          record.skillSpanHue !== undefined
+            ? `3px solid ${
+                record.skillSpanBypass
+                  ? "rgba(250,140,22,0.9)"
+                  : `hsl(${record.skillSpanHue}, 65%, 55%)`
+              }`
+            : "3px solid transparent",
       }}
     >
       <span
@@ -202,18 +240,37 @@ function RecordRow({
           textAlign: "right",
         }}
       >
-        {multiRequest && (
+        {multiRequest && onOpenRun ? (
+          <span
+            title={t(storedLocale(), "runViewHint")}
+            onClick={(event: ReactNS.MouseEvent<HTMLSpanElement>) => {
+              event.stopPropagation();
+              onOpenRun(record.runIndex);
+            }}
+            style={{
+              opacity: 0.75,
+              marginRight: 3,
+              cursor: "pointer",
+              textDecoration: "underline dotted",
+              textUnderlineOffset: 2,
+            }}
+          >
+            R{record.runIndex}
+          </span>
+        ) : multiRequest ? (
           <span style={{ opacity: 0.65, marginRight: 3 }}>
             R{record.runIndex}
           </span>
-        )}
+        ) : null}
         #{record.index}
       </span>
       <Tag
         color={
-          (record.markerKind && MARKER_META[record.markerKind]?.color) ||
-          KIND_COLORS[record.kind] ||
-          "default"
+          record.kind === "tool" && record.skillName
+            ? "geekblue"
+            : (record.markerKind && MARKER_META[record.markerKind]?.color) ||
+              KIND_COLORS[record.kind] ||
+              "default"
         }
         icon={
           (record.markerKind && MARKER_META[record.markerKind]?.icon) ||
@@ -226,8 +283,93 @@ function RecordRow({
           flexShrink: 0,
         }}
       >
-        {recordKindLabel(record, storedLocale())}
+        {record.kind === "tool" && record.skillName
+          ? t(storedLocale(), "skillLoadKind")
+          : recordKindLabel(record, storedLocale())}
       </Tag>
+      {record.kind === "message" &&
+      record.model &&
+      record.model !== "unknown" ? (
+        <Tag
+          title={record.model}
+          style={{
+            marginInlineEnd: 0,
+            fontSize: 10,
+            lineHeight: "16px",
+            flexShrink: 0,
+            maxWidth: 160,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {record.model}
+        </Tag>
+      ) : null}
+      {record.inSkill ? (
+        <Tag
+          color={record.inSkillLoaded ? "geekblue" : "orange"}
+          title={
+            record.inSkillLoaded
+              ? record.inSkill
+              : `${record.inSkill} — ${t(storedLocale(), "skillBypass")}`
+          }
+          style={{
+            marginInlineEnd: 0,
+            fontSize: 10,
+            lineHeight: "16px",
+            flexShrink: 0,
+            maxWidth: 160,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          ⚡{record.inSkill}
+        </Tag>
+      ) : record.guidedSkill ? (
+        <Tooltip
+          title={`${record.guidedSkill} — ${
+            record.guidedReason === "slash"
+              ? t(storedLocale(), "guidedBySlash")
+              : t(storedLocale(), "guidedByLoad")
+          }`}
+        >
+          {/* Inference is deliberately quiet: plain colored text, no
+           * tag chrome — facts (⚡) get tags, inferences do not. */}
+          <Text
+            style={{
+              fontSize: 10,
+              flexShrink: 0,
+              maxWidth: 160,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              color: "#2f54eb",
+            }}
+          >
+            ∈{record.guidedSkill}
+          </Text>
+        </Tooltip>
+      ) : null}
+      {record.kind === "user" && record.skillName ? (
+        <Tag
+          color="geekblue"
+          title={record.skillName}
+          style={{
+            marginInlineEnd: 0,
+            fontSize: 10,
+            lineHeight: "16px",
+            flexShrink: 0,
+            maxWidth: 160,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          /{record.skillName}
+        </Tag>
+      ) : null}
       <span
         style={{
           flex: 1,
@@ -242,6 +384,23 @@ function RecordRow({
           <Text type="secondary" style={{ fontSize: 12 }}>
             {receiptLabel(record, storedLocale())}
           </Text>
+        ) : record.kind === "tool" && record.skillName ? (
+          <>
+            <Text strong style={{ fontSize: 12 }}>
+              {record.skillName}
+            </Text>
+            {record.toolError ? (
+              <Text type="danger" style={{ fontSize: 12 }}>
+                {` → ${record.toolError}`}
+              </Text>
+            ) : record.toolOutputChars ? (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {` · ${t(storedLocale(), "skillLoaded")} ${formatTokens(
+                  record.toolOutputChars,
+                )} ${t(storedLocale(), "charUnit")}`}
+              </Text>
+            ) : null}
+          </>
         ) : record.kind === "tool" && record.toolName ? (
           <>
             <Text strong style={{ fontSize: 12 }}>
@@ -289,7 +448,16 @@ function RecordRow({
           textAlign: "right",
         }}
       >
-        {tokens ? <span style={{ color: "#1677ff" }}>{tokens}</span> : null}
+        {tokens ? (
+          <span title={tokenTitle}>
+            <span style={{ color: "#1677ff" }}>{tokens}</span>
+            {reasoning ? (
+              <span style={{ color: "#722ed1" }}>
+                {` · ${formatTokens(reasoning)}`}
+              </span>
+            ) : null}
+          </span>
+        ) : null}
         {tokens ? " · " : ""}
         {(record.kind === "message" || record.kind === "tool") &&
           formatSeconds(record.timeSeconds)}
@@ -305,6 +473,7 @@ function BoundaryRow({
   cellCount,
   onToggle,
   onSelect,
+  onSkillSpanOpen,
 }: {
   turn: TrajectoryTurnModel;
   collapsed: boolean;
@@ -312,6 +481,7 @@ function BoundaryRow({
   cellCount: number;
   onToggle: () => void;
   onSelect: () => void;
+  onSkillSpanOpen?: (skill: string, turn: number | null) => void;
 }) {
   const locale = storedLocale();
   return (
@@ -360,6 +530,37 @@ function BoundaryRow({
         <Text type="secondary" style={{ fontSize: 11 }}>
           {cellCount} {t(locale, "events")}
         </Text>
+        {turn.skillsUsed && turn.skillsUsed.length > 0 ? (
+          /* Wrapper span keeps the click working even if the host's
+           * antd Tag version does not forward onClick (idempotent). */
+          <span
+            onClick={(event: ReactNS.MouseEvent<HTMLSpanElement>) => {
+              if (!onSkillSpanOpen) return;
+              event.stopPropagation();
+              onSkillSpanOpen(turn.skillsUsed![0], turn.turn);
+            }}
+            style={{
+              display: "inline-flex",
+              cursor: onSkillSpanOpen ? "pointer" : undefined,
+            }}
+          >
+            <Tag
+              color="geekblue"
+              title={turn.skillsUsed.join(", ")}
+              style={{
+                marginInlineEnd: 0,
+                fontSize: 10,
+                lineHeight: "16px",
+                cursor: "inherit",
+              }}
+            >
+              📚 {turn.skillsUsed.slice(0, 2).join(" ")}
+              {turn.skillsUsed.length > 2
+                ? ` +${turn.skillsUsed.length - 2}`
+                : ""}
+            </Tag>
+          </span>
+        ) : null}
         <Tag
           color={STATUS_COLORS[turn.status] ?? "default"}
           style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: "16px" }}
@@ -388,6 +589,7 @@ export function Ledger({
   onLoadOlder,
   initialRecord,
   emptyText,
+  onSkillSpanOpen,
 }: LedgerProps) {
   const locale = storedLocale();
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -501,6 +703,7 @@ export function Ledger({
             dimmed={dimFor(record)}
             multiRequest={multiRequest}
             onSelect={() => onSelectedIndexChange(record.index)}
+            onOpenRun={onSelectedTurnChange}
           />
         );
       }
@@ -515,6 +718,12 @@ export function Ledger({
             cellCount={turn.groups[0]?.cells.length ?? 0}
             onToggle={() => onToggleTurn(turnNumber)}
             onSelect={() => onSelectedTurnChange(turnNumber)}
+            onSkillSpanOpen={
+              onSkillSpanOpen
+                ? (skill: string, turnNo: number | null) =>
+                    onSkillSpanOpen(skill, turnNo)
+                : undefined
+            }
           />
         );
       }
@@ -528,6 +737,7 @@ export function Ledger({
             dimmed={dimFor(record)}
             multiRequest={multiRequest}
             onSelect={() => onSelectedIndexChange(record.index)}
+            onOpenRun={onSelectedTurnChange}
           />
         );
       }

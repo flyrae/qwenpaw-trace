@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "build": "node scripts/check-icons.js && vite build && node scripts/check-bundle.js && node scripts/smoke-import.js",
+    "build": "node scripts/check-icons.js && vite build && node scripts/check-bundle.js && node scripts/test-skillspans.js && node scripts/smoke-import.js",
     "check:icons": "node scripts/check-icons.js",
     "check:bundle": "node scripts/check-bundle.js",
     "format": "tsc --noEmit && prettier --write --cache .",

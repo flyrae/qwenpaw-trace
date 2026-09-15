@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -514,6 +515,54 @@ class TestModelCall:
         assert new_entries[1]["chars"] == len("tool says 42")
         assert "context_reset" not in calls[1]["data"]
 
+    async def test_tail_update_records_replacement_only(
+        self,
+        service,
+        hook_ctx,
+    ):
+        await AgentTraceRunStartHook().run(hook_ctx)
+        base = [
+            text_msg("system", "sys"),
+            text_msg("user", "q"),
+            text_msg("assistant", "answer v1"),
+        ]
+        grown = [
+            text_msg("system", "sys"),
+            text_msg("user", "q"),
+            text_msg("assistant", "answer v1 continued"),
+        ]
+
+        async def next_handler(**kwargs):
+            return SimpleNamespace(text="a")
+
+        await TraceMiddleware().on_model_call(
+            agent=None,
+            input_kwargs={"messages": base},
+            next_handler=next_handler,
+        )
+        await TraceMiddleware().on_model_call(
+            agent=None,
+            input_kwargs={"messages": grown},
+            next_handler=next_handler,
+        )
+        await AgentTraceFinalizeHook().run(hook_ctx)
+        events = await drained_events(service, "sess-1")
+        calls = [e for e in events if e["type"] == "llm/call"]
+        first = calls[0]["data"]
+        second = calls[1]["data"]
+        assert [m["text"] for m in first["messages_new"]] == [
+            "sys",
+            "q",
+            "answer v1",
+        ]
+        assert "context_reset" not in first
+        # Tail replacement: only the updated message, no reset storm.
+        assert [m["text"] for m in second["messages_new"]] == [
+            "answer v1 continued",
+        ]
+        assert second["tail_update"] is True
+        assert "context_reset" not in second
+
     async def test_messages_new_context_reset_on_prefix_change(
         self,
         service,
@@ -571,6 +620,124 @@ class TestModelCall:
         entry = call["data"]["messages_new"][0]
         assert entry["chars"] == 10_000
         assert len(entry["text"]) <= service.config.max_payload_chars
+
+    async def test_run_start_records_slash_skill(self, service, hook_ctx):
+        hook_ctx.input_msgs = [
+            SimpleNamespace(
+                role="user",
+                content="/xlsx open this excel\n\n<skill>\n<name>xlsx</name>\n<description>Sheets.</description>\n</skill>\n",
+            ),
+        ]
+        await AgentTraceRunStartHook().run(hook_ctx)
+        await AgentTraceFinalizeHook().run(hook_ctx)
+        events = await drained_events(service, "sess-1")
+        start = [e for e in events if e["type"] == "run/start"][0]
+        assert start["data"]["slash_skill"] == "xlsx"
+        assert start["data"]["trigger"] == "skill_command"
+
+    async def test_tool_call_records_skill_resource(self, service, hook_ctx):
+        await AgentTraceRunStartHook().run(hook_ctx)
+        skill_dir = "D:\\\\ws\\\\skills\\\\docx"
+        prompt = (
+            "# System\n\n<agent-skills>\n"
+            "<skill>\n<name>docx</name>\n<description>d</description>\n"
+            "<dir>" + skill_dir + "</dir>\n</skill>\n"
+            "</agent-skills>\n"
+        )
+
+        async def next_handler(**kwargs):
+            return SimpleNamespace(text="a")
+
+        # A model call first: the middleware parses + caches the dir map.
+        await TraceMiddleware().on_model_call(
+            agent=None,
+            input_kwargs={
+                "messages": [
+                    text_msg("system", prompt),
+                    text_msg("user", "q"),
+                ],
+            },
+            next_handler=next_handler,
+        )
+        cmd = "cd /d D:\\\\ws\\\\skills\\\\docx" + " && python scripts/x.py"
+        tool_input = json.dumps({"command": cmd})
+        tool_call = SimpleNamespace(
+            name="execute_shell_command",
+            input=tool_input,
+            id="tc-sr",
+        )
+
+        async def acting():
+            yield ToolResponse(
+                content=[TextBlock(type="text", text="ok")],
+            )
+
+        async for _ in TraceMiddleware().on_acting(
+            agent=None,
+            input_kwargs={"tool_call": tool_call},
+            next_handler=acting,
+        ):
+            pass
+        await AgentTraceFinalizeHook().run(hook_ctx)
+        events = await drained_events(service, "sess-1")
+        call = [e for e in events if e["type"] == "tool/call"][0]
+        assert call["data"]["skill_resource"] == "docx"
+
+    async def test_skill_result_records_sha(self, service, hook_ctx):
+        await AgentTraceRunStartHook().run(hook_ctx)
+        body = "# DOCX skill body\n"
+
+        async def acting():
+            yield ToolResponse(
+                content=[TextBlock(type="text", text=body)],
+            )
+
+        async for _ in TraceMiddleware().on_acting(
+            agent=None,
+            input_kwargs={
+                "tool_call": SimpleNamespace(
+                    name="Skill",
+                    input='{"skill": "docx"}',
+                    id="tc-sha",
+                ),
+            },
+            next_handler=acting,
+        ):
+            pass
+        await AgentTraceFinalizeHook().run(hook_ctx)
+        events = await drained_events(service, "sess-1")
+        result = [e for e in events if e["type"] == "tool/result"][0]
+        assert (
+            result["data"]["skill_sha"]
+            == hashlib.sha256(
+                body.encode("utf-8"),
+            ).hexdigest()[:16]
+        )
+
+        # A fresh run for the non-skill check (finalize closed the last).
+        await AgentTraceRunStartHook().run(hook_ctx)
+
+        async def acting2():
+            yield ToolResponse(
+                content=[TextBlock(type="text", text="plain")],
+            )
+
+        async for _ in TraceMiddleware().on_acting(
+            agent=None,
+            input_kwargs={
+                "tool_call": SimpleNamespace(
+                    name="execute_shell_command",
+                    input="{}",
+                    id="tc-nosha",
+                ),
+            },
+            next_handler=acting2,
+        ):
+            pass
+        await AgentTraceFinalizeHook().run(hook_ctx)
+        events = await drained_events(service, "sess-1")
+        results = [e for e in events if e["type"] == "tool/result"]
+        assert "skill_sha" not in results[-1]["data"]
 
     async def test_streaming_records_assembled_output(
         self,

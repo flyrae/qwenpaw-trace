@@ -30,6 +30,7 @@ _expose_package_dir()
 
 
 async def _on_startup() -> None:
+    from agent_trace.api_payload_patch import apply_api_payload_patch
     from agent_trace.approvals_patch import apply_approval_patch
     from agent_trace.service import get_service
 
@@ -38,12 +39,15 @@ async def _on_startup() -> None:
         await service.start()
         logger.info("agent-trace: recording to %s", service.root)
     apply_approval_patch()
+    apply_api_payload_patch()
 
 
 async def _on_shutdown() -> None:
+    from agent_trace.api_payload_patch import restore_api_payload_patch
     from agent_trace.approvals_patch import restore_approval_patch
     from agent_trace.service import get_service
 
+    restore_api_payload_patch()
     restore_approval_patch()
     service = get_service()
     if service is not None:
@@ -52,10 +56,12 @@ async def _on_shutdown() -> None:
 
 
 async def _on_uninstall(plugin_id: str, delete_files: bool) -> None:
+    from agent_trace.api_payload_patch import restore_api_payload_patch
     from agent_trace.approvals_patch import restore_approval_patch
     from agent_trace.service import get_service, set_service
 
     del plugin_id
+    restore_api_payload_patch()
     restore_approval_patch()
     service = get_service()
     if service is None:

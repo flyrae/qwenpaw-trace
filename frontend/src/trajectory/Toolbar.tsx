@@ -7,9 +7,14 @@ import type { TrajectoryTimelineMode } from "./timeline";
 
 const host = window.QwenPaw.host;
 const React: typeof ReactNS = host.React;
-const { Button, Input, Segmented, Tooltip } = host.antd;
-const { MenuFoldOutlined, MenuUnfoldOutlined, ReloadOutlined, SearchOutlined } =
-  host.antdIcons;
+const { Button, Input, Popover, Segmented, Tooltip } = host.antd;
+const {
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+  QuestionCircleOutlined,
+  ReloadOutlined,
+  SearchOutlined,
+} = host.antdIcons;
 
 export interface ToolbarProps {
   mode: TrajectoryTimelineMode;
@@ -86,7 +91,36 @@ export function Toolbar({
           />
         </Tooltip>
       )}
-      <span style={{ marginLeft: "auto" }}>
+      <span style={{ marginLeft: "auto", display: "inline-flex", gap: 10 }}>
+        <Popover
+          trigger="click"
+          placement="bottomRight"
+          content={
+            <div style={{ maxWidth: 340, fontSize: 12, lineHeight: "20px" }}>
+              <div>
+                <strong>📚</strong> {t(locale, "legendLoad")}
+              </div>
+              <div>
+                <strong>⚡</strong> {t(locale, "legendResource")}
+              </div>
+              <div>
+                <strong>∈</strong> {t(locale, "legendGuided")}
+              </div>
+              <div>
+                <strong>{t(locale, "legendStripTitle")}</strong>{" "}
+                {t(locale, "legendStrip")}
+              </div>
+              <div>
+                <strong>{t(locale, "legendBandTitle")}</strong>{" "}
+                {t(locale, "legendBand")}
+              </div>
+            </div>
+          }
+        >
+          <a style={{ fontSize: 12, color: "rgba(128,128,128,1)" }}>
+            <QuestionCircleOutlined /> {t(locale, "legendTitle")}
+          </a>
+        </Popover>
         <a
           onClick={onRefresh}
           style={{ fontSize: 12, color: "rgba(128,128,128,1)" }}

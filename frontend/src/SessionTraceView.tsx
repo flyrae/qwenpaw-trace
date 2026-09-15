@@ -20,13 +20,14 @@ import {
   type SessionSummary,
   type TraceConfigUi,
 } from "./traceApi";
-import { Inspector } from "./trajectory/Inspector";
+import { Inspector, SpanInspector } from "./trajectory/Inspector";
 import type { RequestSummary } from "./trajectory/Inspector";
 import { Ledger } from "./trajectory/Ledger";
 import {
   formatSeconds,
   formatThroughput,
   formatTokens,
+  type TrajectoryRecord,
 } from "./trajectory/records";
 import {
   buildTurns,
@@ -161,6 +162,7 @@ export function SessionTraceView({
   const [range, setRange] = useState<TrajectoryTimeRange | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [selectedTurn, setSelectedTurn] = useState<number | null>(null);
+  const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
   const [collapsedTurns, setCollapsedTurns] = useState<ReadonlySet<number>>(
     new Set(),
   );
@@ -289,25 +291,56 @@ export function SessionTraceView({
   );
 
   const searchMatchIndexes = useMemo(() => {
-    const needle = eventSearch.trim().toLowerCase();
-    if (!needle) return null;
+    const terms = eventSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return null;
+    // dsh parity: AND across terms, over every field the inspector can
+    // show — record summaries, tool args/results, thinking, input
+    // messages (middleware deltas), wire-level API payload, options,
+    // skill attribution, and prompt-snapshot tool names.
+    const haystackOf = (record: TrajectoryRecord): string =>
+      [
+        record.text,
+        record.outputText,
+        record.thinkingText,
+        record.toolName,
+        record.toolInput,
+        record.toolOutput,
+        record.toolError,
+        record.model,
+        record.provider,
+        record.marker,
+        record.skillName,
+        record.inSkill,
+        record.guidedSkill,
+        record.channel,
+        record.messages
+          ?.map((message) => `${message.role} ${message.text}`)
+          .join("\n"),
+        record.inputNew
+          ?.map((message) => `${message.role} ${message.text ?? ""}`)
+          .join("\n"),
+        record.apiPayload
+          ? [
+              record.apiPayload.model,
+              ...record.apiPayload.messages.map(
+                (message) => `${message.role} ${message.content}`,
+              ),
+            ].join("\n")
+          : "",
+        record.options ? JSON.stringify(record.options) : "",
+        record.toolSchema ? JSON.stringify(record.toolSchema) : "",
+        record.headerTools?.join(" "),
+        record.prompt ?? "",
+      ]
+        .filter(Boolean)
+        .join("\n")
+        .toLowerCase();
     return new Set(
       records
-        .filter((record) =>
-          [
-            record.text,
-            record.outputText,
-            record.thinkingText,
-            record.toolName,
-            record.toolInput,
-            record.toolOutput,
-            record.model,
-          ]
-            .filter(Boolean)
-            .join("\n")
-            .toLowerCase()
-            .includes(needle),
-        )
+        .filter((record) => {
+          const haystack = haystackOf(record);
+          return terms.every((term) => haystack.includes(term));
+        })
         .map((record) => record.index),
     );
   }, [eventSearch, records]);
@@ -372,6 +405,50 @@ export function SessionTraceView({
     const lastOptions = [...llmCells].reverse().find((cell) => cell.options)
       ?.options;
     const lastMessage = [...llmCells].reverse().find((cell) => cell.outputText);
+
+    // Input composition: aggregate the size-only messages_meta of this
+    // run's model calls into role buckets (chars only, no content).
+    let composition: RequestSummary["inputComposition"];
+    const metaCells = llmCells.filter((cell) => cell.messagesMeta);
+    if (metaCells.length > 0) {
+      const charsByRole: Record<string, number> = {};
+      let totalChars = 0;
+      let maxToolChars = 0;
+      for (const cell of metaCells) {
+        const meta = cell.messagesMeta!;
+        for (const [role, chars] of Object.entries(meta.charsByRole)) {
+          charsByRole[role] = (charsByRole[role] ?? 0) + chars;
+        }
+        totalChars += meta.totalChars;
+        maxToolChars = Math.max(maxToolChars, meta.maxToolChars);
+      }
+      composition = { charsByRole, totalChars, maxToolChars };
+    }
+
+    // Cross-round growth: this run's billed input vs the previous run's.
+    // input_tokens[n] - input_tokens[n-1] ≈ content added by the previous
+    // round (tool results + user message + reasoning).
+    const turnIndex = turns.findIndex((item) => item.turn === selectedTurn);
+    const prevTurn = turnIndex > 0 ? turns[turnIndex - 1] : null;
+    let prevInputTokens: number | null = null;
+    if (prevTurn) {
+      prevInputTokens = 0;
+      for (const group of prevTurn.groups) {
+        for (const cell of group.cells) {
+          if (cell.kind === "message" && cell.usage) {
+            prevInputTokens += cell.usage.input_tokens ?? 0;
+          }
+        }
+      }
+    }
+    const growth =
+      prevInputTokens === null && turnIndex !== 0
+        ? undefined
+        : {
+            prevInputTokens,
+            deltaTokens: inputTokens - (prevInputTokens ?? 0),
+          };
+
     return {
       turn: selectedTurn,
       status: turn.status,
@@ -387,6 +464,8 @@ export function SessionTraceView({
       cacheReadTokens,
       cacheWriteTokens,
       reasoningTokens,
+      inputComposition: composition,
+      growth,
       resultIndex: lastMessage?.index,
       ttftMs,
       decodeMs,
@@ -471,13 +550,54 @@ export function SessionTraceView({
     if (summary) {
       parts.push(formatBytes(summary.size_bytes));
     }
+    if (sessionStats.skills) {
+      const skillText = Object.entries(sessionStats.skills)
+        .sort((a, b) => b[1] - a[1])
+        .map(([name, count]) => `${name} ×${count}`)
+        .join(" · ");
+      if (skillText) parts.push(`📚 ${skillText}`);
+    }
+    // Layer 3: skills whose resources were touched without ever being
+    // loaded in this session (bypass of the disclosure flow).
+    if (initialHeader?.prompt) {
+      const executed = new Set<string>();
+      const loaded = new Set<string>();
+      for (const turn of turns) {
+        for (const group of turn.groups) {
+          for (const cell of group.cells) {
+            if (cell.skillName) loaded.add(cell.skillName);
+            else if (cell.inSkill) executed.add(cell.inSkill);
+          }
+        }
+      }
+      const bypass = [...executed].filter((name) => !loaded.has(name));
+      if (bypass.length > 0) {
+        parts.push(
+          `⚡ ${t(locale, "skillBypassStrip")}: ${bypass.join(" · ")}`,
+        );
+      }
+    }
     return parts.join(" | ");
-  }, [sessionStats, summary, locale]);
+  }, [sessionStats, summary, locale, turns, initialHeader]);
 
   const closeInspector = () => {
     setSelectedIndex(null);
     setSelectedTurn(null);
   };
+
+  // Selecting a record supersedes the span view.
+  useEffect(() => {
+    if (selectedIndex !== null) setSelectedSpanId(null);
+  }, [selectedIndex]);
+  const selectedSpan = useMemo(
+    () =>
+      selectedSpanId === null
+        ? null
+        : turns
+            .flatMap((turn) => turn.skillSpans ?? [])
+            .find((span) => span.id === selectedSpanId) ?? null,
+    [selectedSpanId, turns],
+  );
 
   // A deep link to a session without trace data yet (e.g. a brand-new
   // chat) is not an error — the API answers 404; render a friendly
@@ -697,6 +817,7 @@ export function SessionTraceView({
         onRangeChange={setRange}
         onRecordSelect={setSelectedIndex}
         onRecordFocus={setSelectedIndex}
+        onSkillSpanSelect={setSelectedSpanId}
       />
       {detailLoading && !detail ? (
         <div style={{ textAlign: "center", paddingTop: 64 }}>
@@ -738,6 +859,20 @@ export function SessionTraceView({
                 setSelectedIndex(index);
                 setSelectedTurn(null);
               }}
+              onSkillSpanOpen={(skill: string, turnNo: number | null) => {
+                const all = turns.flatMap((item) => item.skillSpans ?? []);
+                // Prefer the span of the clicked request, else earliest.
+                const byTurn =
+                  turnNo !== null
+                    ? (
+                        turns.find((item) => item.turn === turnNo)
+                          ?.skillSpans ?? []
+                      ).find((span) => span.skill === skill)
+                    : undefined;
+                const chosen =
+                  byTurn ?? all.find((span) => span.skill === skill);
+                if (chosen) setSelectedSpanId(chosen.id);
+              }}
               onSelectedTurnChange={(turn: number) => {
                 setSelectedTurn(turn);
                 setSelectedIndex(null);
@@ -765,7 +900,17 @@ export function SessionTraceView({
               initialRecord={initialHeader}
             />
           </div>
-          {showInspector ? (
+          {selectedSpan ? (
+            <SpanInspector
+              span={selectedSpan}
+              records={records}
+              onJumpRecord={(index: number) => {
+                setSelectedSpanId(null);
+                setSelectedIndex(index);
+              }}
+              onClose={() => setSelectedSpanId(null)}
+            />
+          ) : showInspector ? (
             <Inspector
               record={selectedRecord}
               request={requestSummary}
