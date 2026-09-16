@@ -363,12 +363,28 @@ def _resolve_target(module_name: str, attr_path: str):
 
 
 def apply_api_payload_patch() -> None:
-    """Attach the wrapt wrappers to the OpenAI SDK."""
+    """Attach the wrapt wrappers to the OpenAI SDK.
+
+    Never raises: when ``wrapt`` is unavailable (e.g. the plugin was
+    copied into place without its dependencies), the wire-level API
+    capture degrades to off with one warning and the rest of the
+    plugin — runs, LLM/tool events, shipping — keeps working.
+    """
     global _active
     if _active:
         return
 
-    from wrapt import wrap_function_wrapper
+    try:
+        from wrapt import wrap_function_wrapper  # noqa: PLC0415
+    except ImportError:
+        logger.warning(
+            "agent-trace: wrapt is not installed — wire-level API "
+            "payload capture is DISABLED (everything else works). "
+            "Install it with `pip install wrapt` in QwenPaw's Python "
+            "to enable; `qwenpaw plugin install` does this "
+            "automatically."
+        )
+        return
 
     for module_name, attr_path in _TARGETS:
         target = f"{module_name}.{attr_path}"

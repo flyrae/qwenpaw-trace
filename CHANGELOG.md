@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.1 (2026-09-16)
+
+- A missing ``wrapt`` no longer fails the plugin load: the wire-level
+  API capture degrades to off with one actionable warning (install
+  hint), while runs/LLM/tool events and remote shipping keep working.
+  Affects deployments that received the plugin by file copy (which
+  bypasses dependency installation); ``qwenpaw plugin install``
+  installs wrapt automatically.
+
 ## 0.7.0 (2026-09-16)
 
 > Post-release split: the central collector (`server/`) moved to its

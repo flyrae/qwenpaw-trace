@@ -190,6 +190,40 @@ class TestPatchLifecycle:
         )
         assert callable(create)
 
+    def test_apply_without_wrapt_degrades_gracefully(self, monkeypatch):
+        """Regression: a missing wrapt must disable only the wire-level
+        capture — never fail the whole plugin load (machines that got
+        the plugin by file copy skip dependency installation)."""
+        import logging
+        import sys
+
+        from agent_trace import api_payload_patch
+
+        # Attach directly to the plugin logger — caplog misses this
+        # logger hierarchy in this environment.
+        messages: list = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record):
+                messages.append(record.getMessage())
+
+        capture = _Capture(level=logging.WARNING)
+        plugin_logger = logging.getLogger("qwenpaw.plugins.agent_trace")
+        plugin_logger.addHandler(capture)
+
+        # A None entry makes `import wrapt` raise ImportError.
+        monkeypatch.setitem(sys.modules, "wrapt", None)
+        api_payload_patch._active = False
+        try:
+            api_payload_patch.apply_api_payload_patch()  # must not raise
+            assert api_payload_patch._active is False
+            assert any(
+                "wrapt is not installed" in m for m in messages
+            ), messages
+        finally:
+            plugin_logger.removeHandler(capture)
+            api_payload_patch.restore_api_payload_patch()
+
     def test_apply_attaches_without_warning(self, caplog):
         """The patch must actually attach to the real SDK (not just set
         the active flag while every target fails into a warning)."""
