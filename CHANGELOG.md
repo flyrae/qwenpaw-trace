@@ -2,6 +2,10 @@
 
 ## 0.7.0 (2026-09-16)
 
+> Post-release split: the central collector (`server/`) moved to its
+> own repo, [flyrae/qwenpaw-trace-server](https://github.com/flyrae/qwenpaw-trace-server).
+> This repo is the plugin (edge) side only.
+
 Central collection for enterprise deployments.
 
 - **Remote shipper** (`agent_trace/shipper.py`): every event still lands

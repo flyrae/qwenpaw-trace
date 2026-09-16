@@ -184,18 +184,19 @@ to restore capture.
 ## Enterprise deployment (central collection)
 
 Multiple QwenPaw instances can ship their traces to one central
-collector for unified, per-user viewing:
+collector for unified, per-user viewing. The collector (ingest +
+read API + portal dashboard + standalone trace UI) lives in its own
+repo: [flyrae/qwenpaw-trace-server](https://github.com/flyrae/qwenpaw-trace-server).
 
-```bash
-# central server (FastAPI + SQLite, same read API + standalone UI)
-cd server && uvicorn app:app --port 8790      # see server/README.md
+On this (edge) side, enable shipping in `<WORKING_DIR>/traces/config.json`:
 
-# each QwenPaw instance: <WORKING_DIR>/traces/config.json
+```json
 { "remote_enabled": true,
   "remote_url": "http://collector.internal:8790",
   "remote_token": "..." }
 ```
 
 Local JSONL files stay the source of truth; shipping is batched,
-gzip'd, retried with a disk queue, and can never block the agent loop.
-Full design, deployment modes, and ops notes: [server/README.md](./server/README.md).
+gzip'd, retried with a disk queue, and can never block the agent
+loop. Instance identity precedence: `remote_instance_id` config >
+`QWENPAW_INSTANCE_ID` env > persisted `traces/.instance-id`.
