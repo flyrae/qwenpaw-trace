@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Trace 中心</title>
+    <style>
+      :root {
+        --ink: #0f172a;
+        --ink-2: #475569;
+        --ink-3: #94a3b8;
+        --line: #e2e8f0;
+        --bg: #f6f8fb;
+        --card: #ffffff;
+        --brand: #2563eb;
+        --brand-weak: #eff6ff;
+        --ok: #16a34a;
+        --warn: #d97706;
+        --err: #dc2626;
+        --radius: 12px;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--ink);
+        font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      }
+      a { color: var(--brand); text-decoration: none; }
+
+      /* ── header ─────────────────────────────────────────── */
+      .topbar {
+        background: var(--ink);
+        color: #e2e8f0;
+        padding: 0 28px;
+        height: 56px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+      .brand { display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 600; color: #fff; }
+      .brand .logo {
+        width: 28px; height: 28px; border-radius: 8px;
+        background: linear-gradient(135deg, #3b82f6, #06b6d4);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 15px;
+      }
+      .brand .sub { font-weight: 400; font-size: 12px; color: #94a3b8; margin-left: 2px; }
+      .topbar .spacer { flex: 1; }
+      .pill {
+        display: inline-flex; align-items: center; gap: 6px;
+        font-size: 12px; color: #cbd5e1;
+        border: 1px solid rgba(255,255,255,.14);
+        border-radius: 999px; padding: 3px 10px;
+      }
+      .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+      .dot.off { background: var(--err); }
+      .pill button {
+        background: none; border: none; color: #93c5fd; cursor: pointer;
+        font-size: 12px; padding: 0;
+      }
+
+      .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 28px 60px; }
+
+      /* ── KPI cards ──────────────────────────────────────── */
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+        gap: 14px;
+      }
+      .kpi {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 16px 18px;
+      }
+      .kpi .label { font-size: 12px; color: var(--ink-3); }
+      .kpi .value { font-size: 26px; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
+      .kpi .value small { font-size: 13px; font-weight: 400; color: var(--ink-3); margin-left: 2px; }
+      .kpi .hint { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+      .kpi.accent { border-color: #bfdbfe; background: var(--brand-weak); }
+
+      /* ── sections ───────────────────────────────────────── */
+      .section { margin-top: 30px; }
+      .section > h2 {
+        font-size: 14px; font-weight: 600; margin: 0 0 12px;
+        display: flex; align-items: baseline; gap: 10px;
+      }
+      .section > h2 .count { font-size: 12px; color: var(--ink-3); font-weight: 400; }
+      .section > h2 .more { margin-left: auto; font-size: 12px; font-weight: 400; }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        overflow: hidden;
+      }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th {
+        text-align: left; font-weight: 500; color: var(--ink-3);
+        font-size: 12px; padding: 10px 16px;
+        border-bottom: 1px solid var(--line);
+        background: #fbfcfe;
+        white-space: nowrap;
+      }
+      td { padding: 11px 16px; border-bottom: 1px solid #f1f5f9; white-space: nowrap; }
+      tr:last-child td { border-bottom: none; }
+      tbody tr.click { cursor: pointer; }
+      tbody tr.click:hover { background: #f8fafc; }
+      td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+      .muted { color: var(--ink-3); }
+      .title-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+
+      .tag {
+        display: inline-block; font-size: 11px; line-height: 18px;
+        border-radius: 5px; padding: 1px 7px;
+      }
+      .tag.ok { color: var(--ok); background: #f0fdf4; }
+      .tag.warn { color: var(--warn); background: #fffbeb; }
+      .tag.err { color: var(--err); background: #fef2f2; }
+      .tag.info { color: var(--brand); background: var(--brand-weak); }
+      .tag.plain { color: var(--ink-2); background: #f1f5f9; }
+
+      .empty { padding: 42px; text-align: center; color: var(--ink-3); font-size: 13px; }
+
+      /* ── login gate ─────────────────────────────────────── */
+      #gate {
+        min-height: calc(100vh - 56px);
+        display: flex; align-items: center; justify-content: center;
+      }
+      .gate-card {
+        width: 380px; background: var(--card);
+        border: 1px solid var(--line); border-radius: 16px;
+        padding: 36px 34px; text-align: center;
+        box-shadow: 0 10px 40px rgba(15, 23, 42, .06);
+      }
+      .gate-card .lock {
+        width: 52px; height: 52px; margin: 0 auto 16px;
+        border-radius: 14px; background: var(--brand-weak);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 24px;
+      }
+      .gate-card h1 { font-size: 18px; margin: 0 0 6px; }
+      .gate-card p { color: var(--ink-3); font-size: 13px; margin: 0 0 22px; }
+      .gate-card input {
+        width: 100%; padding: 10px 12px; font-size: 14px;
+        border: 1px solid var(--line); border-radius: 8px; outline: none;
+      }
+      .gate-card input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+      .gate-card .err-msg { color: var(--err); font-size: 12px; height: 18px; margin-top: 8px; }
+      .gate-card button {
+        width: 100%; margin-top: 6px; padding: 10px;
+        background: var(--brand); color: #fff; font-size: 14px;
+        border: none; border-radius: 8px; cursor: pointer;
+      }
+      .gate-card button:hover { background: #1d4ed8; }
+      .hidden { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">🧭</span>
+        Agent Trace <span class="sub">中央轨迹中心</span>
+      </div>
+      <span class="spacer"></span>
+      <span class="pill"><span class="dot" id="health-dot"></span><span id="health-text">连接中…</span></span>
+      <span class="pill">企业部署 · <button id="logout">断开</button></span>
+    </header>
+
+    <!-- 登录门 -->
+    <div id="gate" class="hidden">
+      <div class="gate-card">
+        <div class="lock">🔐</div>
+        <h1>连接到中央轨迹服务</h1>
+        <p>输入服务端签发的访问令牌（TRACE_TOKEN）</p>
+        <input id="token-input" type="password" placeholder="访问令牌" autocomplete="off" />
+        <div class="err-msg" id="gate-error"></div>
+        <button id="connect-btn">进入控制台</button>
+      </div>
+    </div>
+
+    <!-- 仪表盘 -->
+    <div id="dash" class="wrap hidden">
+      <div class="kpis" id="kpis"></div>
+
+      <div class="section">
+        <h2>接入实例 <span class="count" id="inst-count"></span></h2>
+        <div class="card">
+          <table>
+            <thead>
+              <tr>
+                <th>实例</th><th>主机</th><th>插件版本</th>
+                <th class="num">会话</th><th class="num">LLM 调用</th>
+                <th class="num">Token</th><th class="num">错误</th>
+                <th>最近活动</th>
+              </tr>
+            </thead>
+            <tbody id="inst-rows"></tbody>
+          </table>
+          <div class="empty hidden" id="inst-empty">还没有实例接入 —— 在 QwenPaw 的 traces/config.json 开启 remote_enabled 后重启即接入</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h2>最近会话 <span class="more"><a href="/trace" target="_self">查看全部 →</a></span></h2>
+        <div class="card">
+          <table>
+            <thead>
+              <tr>
+                <th>会话</th><th>用户</th><th>实例</th><th>渠道</th>
+                <th>状态</th><th class="num">轮次</th><th class="num">Token</th>
+                <th>最近活动</th>
+              </tr>
+            </thead>
+            <tbody id="recent-rows"></tbody>
+          </table>
+          <div class="empty hidden" id="recent-empty">暂无会话 —— 与智能体对话后出现在这里</div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const API = "/api/agent-trace";
+      const $ = (id) => document.getElementById(id);
+
+      function token() {
+        return localStorage.getItem("trace_token") || "";
+      }
+
+      async function api(path) {
+        const resp = await fetch(API + path, {
+          headers: { Authorization: "Bearer " + token() },
+        });
+        if (resp.status === 401) throw { unauthorized: true };
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        return resp.json();
+      }
+
+      function fmtNum(n) {
+        n = Number(n || 0);
+        if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+        if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+        if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
+        return String(n);
+      }
+
+      function fmtAgo(iso) {
+        if (!iso) return "—";
+        const ms = Date.now() - Date.parse(iso);
+        if (!Number.isFinite(ms)) return "—";
+        if (ms < 0) return "刚刚";
+        const m = Math.floor(ms / 60000);
+        if (m < 1) return "刚刚";
+        if (m < 60) return m + " 分钟前";
+        const h = Math.floor(m / 60);
+        if (h < 24) return h + " 小时前";
+        return Math.floor(h / 24) + " 天前";
+      }
+
+      function statusTag(status) {
+        if (status === "success") return '<span class="tag ok">成功</span>';
+        if (status === "error") return '<span class="tag err">错误</span>';
+        if (status === "cancelled") return '<span class="tag warn">取消</span>';
+        if (status === "interrupted") return '<span class="tag warn">中断</span>';
+        if (!status) return '<span class="tag plain">—</span>';
+        return '<span class="tag plain">' + status + "</span>";
+      }
+
+      function esc(text) {
+        const div = document.createElement("div");
+        div.textContent = text == null ? "" : String(text);
+        return div.innerHTML;
+      }
+
+      function renderOverview(data) {
+        const t = data.totals;
+        const kpis = [
+          { label: "接入实例", value: t.instances, hint: "QwenPaw 边端" },
+          { label: "会话总数", value: fmtNum(t.sessions), hint: fmtNum(t.events) + " 事件" },
+          { label: "活跃用户", value: fmtNum(t.users), hint: "按渠道 user_id" },
+          { label: "LLM 调用", value: fmtNum(t.llm_calls), hint: fmtNum(t.tool_calls) + " 工具调用" },
+          { label: "Token 用量", value: fmtNum(t.total_tokens), hint: "入 " + fmtNum(t.input_tokens) + " · 出 " + fmtNum(t.output_tokens) },
+          { label: "错误", value: fmtNum(t.errors), hint: t.errors > 0 ? "需要关注" : "运行健康", cls: t.errors > 0 ? "" : "accent" },
+        ];
+        $("kpis").innerHTML = kpis
+          .map(
+            (k) =>
+              '<div class="kpi ' + (k.cls || "") + '"><div class="label">' +
+              k.label + '</div><div class="value">' + k.value +
+              '</div><div class="hint">' + k.hint + "</div></div>",
+          )
+          .join("");
+
+        const insts = data.instances || [];
+        $("inst-count").textContent = insts.length + " 台";
+        $("inst-empty").classList.toggle("hidden", insts.length > 0);
+        $("inst-rows").innerHTML = insts
+          .map(
+            (i) =>
+              "<tr><td><span class=\"tag info\">" + esc(i.instance_id) +
+              "</span></td><td>" + esc(i.hostname || "—") + "</td><td class=\"muted\">" +
+              esc(i.plugin_version || "—") + '</td><td class="num">' + fmtNum(i.sessions) +
+              '</td><td class="num">' + fmtNum(i.llm_calls) + '</td><td class="num">' +
+              fmtNum(i.tokens) + '</td><td class="num">' +
+              (i.errors ? '<span class="tag err">' + i.errors + "</span>" : "0") +
+              "</td><td class=\"muted\">" + fmtAgo(i.last_seen) + "</td></tr>",
+          )
+          .join("");
+
+        const recent = data.recent_sessions || [];
+        $("recent-empty").classList.toggle("hidden", recent.length > 0);
+        $("recent-rows").innerHTML = recent
+          .map(
+            (s) =>
+              '<tr class="click" data-ref="' + esc(
+                (s.instance_id ? s.instance_id + "~" : "") + s.session_id,
+              ) + '"><td class="title-cell"><b>' +
+              esc(s.title || s.session_id) + "</b></td><td>" +
+              (s.user_id ? "👤 " + esc(s.user_id) : '<span class="muted">—</span>') +
+              "</td><td class=\"muted\">" + esc(s.hostname || s.instance_id || "—") +
+              "</td><td>" + esc(s.channel || "—") + "</td><td>" + statusTag(s.status) +
+              '</td><td class="num">' + (s.runs || 0) + '</td><td class="num">' +
+              fmtNum(s.total_tokens) + '</td><td class="muted">' + fmtAgo(s.last_event_t) +
+              "</td></tr>",
+          )
+          .join("");
+        document
+          .querySelectorAll("#recent-rows tr.click")
+          .forEach((row) =>
+            row.addEventListener("click", () => {
+              window.location.href =
+                "/trace/?session=" +
+                encodeURIComponent(row.dataset.ref);
+            }),
+          );
+      }
+
+      async function tick() {
+        try {
+          const data = await api("/overview");
+          $("gate").classList.add("hidden");
+          $("dash").classList.remove("hidden");
+          $("health-dot").classList.remove("off");
+          $("health-text").textContent = "服务正常";
+          renderOverview(data);
+        } catch (exc) {
+          if (exc && exc.unauthorized) {
+            $("dash").classList.add("hidden");
+            $("gate").classList.remove("hidden");
+            $("health-dot").classList.remove("off");
+            $("health-text").textContent = "需要令牌";
+          } else {
+            $("health-dot").classList.add("off");
+            $("health-text").textContent = "服务不可达";
+          }
+        }
+      }
+
+      $("connect-btn").addEventListener("click", async () => {
+        const value = $("token-input").value.trim();
+        $("gate-error").textContent = "";
+        if (!value) {
+          $("gate-error").textContent = "请输入访问令牌";
+          return;
+        }
+        localStorage.setItem("trace_token", value);
+        try {
+          await api("/overview");
+          tick();
+        } catch (exc) {
+          if (exc && exc.unauthorized) {
+            $("gate-error").textContent = "令牌无效，请重试";
+            localStorage.removeItem("trace_token");
+          }
+        }
+      });
+      $("token-input").addEventListener("keydown", (event) => {
+        if (event.key === "Enter") $("connect-btn").click();
+      });
+      $("logout").addEventListener("click", () => {
+        localStorage.removeItem("trace_token");
+        location.reload();
+      });
+
+      tick();
+      setInterval(tick, 10000);
+    </script>
+  </body>
+</html>

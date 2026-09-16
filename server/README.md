@@ -88,3 +88,11 @@ curl -s -H "Authorization: Bearer $T" \
 python -m pytest server/tests -q      # ingest/幂等/过滤/分页/鉴权
 python server/smoke_e2e.py            # 真实 shipper→server→API→UI 全链路
 ```
+
+## 门户入口（Portal）
+
+`/` 是企业门户（`server/portal/`，自包含单文件）：令牌登录门 →
+总览仪表盘（接入实例 / 会话 / 活跃用户 / LLM 调用 / Token / 错误
+KPI 卡）→ 实例列表（版本、用量、最近活动）→ 最近会话（点击进入
+轨迹）。10 秒自动刷新。轨迹查看器在 `/trace`，深链
+`/trace/?session=<instance>~<session_id>`。

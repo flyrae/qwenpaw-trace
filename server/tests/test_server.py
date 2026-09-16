@@ -231,6 +231,30 @@ class TestSessionsApi:
         assert len(lines) == 2
         assert json.loads(lines[0])["type"] == "run/start"
 
+    def test_overview_aggregate(self, client):
+        events = [
+            _event(
+                1,
+                "message/inbound",
+                {"user_id": "bob", "text": "生成周报"},
+            ),
+            _event(
+                2,
+                "llm/result",
+                {"usage": {"input_tokens": 300, "output_tokens": 40}},
+            ),
+            _event(3, "run/end", {"status": "success"}),
+        ]
+        _post_batch(client, _batch(events=events))
+        resp = client.get("/api/agent-trace/overview")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["totals"]["instances"] == 1
+        assert body["totals"]["users"] == 1
+        assert body["totals"]["llm_calls"] == 1
+        assert body["instances"][0]["instance_id"] == "inst-a"
+        assert len(body["recent_sessions"]) == 1
+
     def test_404_for_unknown(self, client):
         assert (
             client.get("/api/agent-trace/sessions/nope").status_code == 404

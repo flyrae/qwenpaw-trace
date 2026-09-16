@@ -202,16 +202,24 @@ def main() -> int:
             )
             check("header served", bool(detail.get("header")))
 
-            # UI shell reachable (no auth for static in this build).
+            # Portal entry + trace shell (static; no auth for static).
             with urllib.request.urlopen(BASE + "/", timeout=10) as resp:
-                html = resp.read().decode("utf-8")
-            check("ui shell served", "QwenPaw" in html and "app.js" in html)
+                portal = resp.read().decode("utf-8")
+            check(
+                "portal served",
+                "Agent Trace" in portal and "trace_token" in portal,
+            )
             with urllib.request.urlopen(
-                BASE + "/app.js", timeout=10
+                BASE + "/trace/", timeout=10
+            ) as resp:
+                shell = resp.read().decode("utf-8")
+            check("trace shell served", "QwenPaw" in shell and "app.js" in shell)
+            with urllib.request.urlopen(
+                BASE + "/trace/app.js", timeout=10
             ) as resp:
                 check("bundle served", resp.status == 200)
             with urllib.request.urlopen(
-                BASE + "/vendor/antd.min.js", timeout=10
+                BASE + "/trace/vendor/antd.min.js", timeout=10
             ) as resp:
                 check("vendor served", resp.status == 200)
 

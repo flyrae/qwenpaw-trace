@@ -58,10 +58,9 @@ async def auth_guard(request: Request, call_next):
         public = (
             path == "/healthz"
             or path == "/"
-            or path.startswith("/vendor")
-            or path == "/app.js"
             or path == "/index.html"
             or path == "/favicon.ico"
+            or path.startswith("/trace")
         )
         if not public:
             header = request.headers.get("Authorization") or ""
@@ -154,6 +153,12 @@ async def list_instances() -> Dict[str, Any]:
     return {"instances": db.list_instances()}
 
 
+@app.get("/api/agent-trace/overview")
+async def overview() -> Dict[str, Any]:
+    """Landing-page aggregate for the portal."""
+    return db.overview()
+
+
 @app.get("/api/agent-trace/sessions/{session_id}")
 async def get_session(
     session_id: str,
@@ -226,13 +231,37 @@ async def export_session(
 
 
 # ----------------------------------------------------------------------
-# Standalone UI (static; see server/ui/README for the shell layout)
+# Static mounts: "/" is the enterprise portal (dashboard + login gate),
+# "/trace" is the trajectory viewer shell (same Console bundle).
 # ----------------------------------------------------------------------
 
+PORTAL_DIR = Path(
+    os.environ.get("TRACE_PORTAL_DIR") or SERVER_ROOT / "portal",
+)
+
+# Mount order matters: "/trace" must register before the catch-all "/".
 if UI_DIR.exists():
+    app.mount(
+        "/trace",
+        StaticFiles(directory=UI_DIR, html=True),
+        name="ui",
+    )
+else:
+    logger.info(
+        "agent-trace server: no UI directory at %s (trace viewer off)",
+        UI_DIR,
+    )
+
+if PORTAL_DIR.exists():
+    app.mount(
+        "/",
+        StaticFiles(directory=PORTAL_DIR, html=True),
+        name="portal",
+    )
+elif UI_DIR.exists():
     app.mount("/", StaticFiles(directory=UI_DIR, html=True), name="ui")
 else:
     logger.info(
-        "agent-trace server: no UI directory at %s (API-only mode)",
-        UI_DIR,
+        "agent-trace server: no static directories under %s (API-only)",
+        SERVER_ROOT,
     )

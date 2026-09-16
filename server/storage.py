@@ -217,6 +217,18 @@ class TraceDatabase:
                 """,
                 (data.get("channel"), instance_id, session_id),
             )
+            # Console sessions carry no message/inbound text; the
+            # run's query is a fine title fallback.
+            query = data.get("query") or data.get("last_user_text")
+            if isinstance(query, str) and query.strip():
+                self._db.execute(
+                    """
+                    UPDATE sessions SET title=?
+                    WHERE instance_id=? AND session_id=? AND
+                        (title IS NULL OR title='')
+                    """,
+                    (query.strip()[:80], instance_id, session_id),
+                )
         elif event_type == "run/end":
             self._db.execute(
                 """
@@ -439,6 +451,59 @@ class TraceDatabase:
             "SELECT * FROM instances ORDER BY last_seen DESC"
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def overview(self) -> Dict[str, Any]:
+        """Landing-page aggregate: per-instance rollups + org totals
+        + the most recent sessions."""
+        instance_rows = self._db.execute(
+            """
+            SELECT i.*,
+                   COUNT(s.session_id) AS sessions,
+                   COALESCE(SUM(s.llm_calls), 0) AS llm_calls,
+                   COALESCE(SUM(s.tool_calls), 0) AS tool_calls,
+                   COALESCE(SUM(s.input_tokens + s.output_tokens), 0)
+                       AS tokens,
+                   COALESCE(SUM(s.errors), 0) AS errors
+            FROM instances i
+            LEFT JOIN sessions s ON s.instance_id = i.instance_id
+            GROUP BY i.instance_id
+            ORDER BY i.last_seen DESC
+            """
+        ).fetchall()
+        totals_row = self._db.execute(
+            """
+            SELECT COUNT(*) AS sessions,
+                   COALESCE(SUM(llm_calls), 0) AS llm_calls,
+                   COALESCE(SUM(tool_calls), 0) AS tool_calls,
+                   COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                   COALESCE(SUM(input_tokens + output_tokens), 0)
+                       AS total_tokens,
+                   COALESCE(SUM(errors), 0) AS errors,
+                   COUNT(DISTINCT NULLIF(user_id, '')) AS users
+            FROM sessions
+            """
+        ).fetchone()
+        events_row = self._db.execute(
+            "SELECT COUNT(*) AS events FROM events"
+        ).fetchone()
+        recent = self.list_sessions(limit=8, offset=0)
+        return {
+            "instances": [dict(row) for row in instance_rows],
+            "totals": {
+                "instances": len(instance_rows),
+                "sessions": totals_row["sessions"],
+                "users": totals_row["users"],
+                "events": events_row["events"],
+                "llm_calls": totals_row["llm_calls"],
+                "tool_calls": totals_row["tool_calls"],
+                "input_tokens": totals_row["input_tokens"],
+                "output_tokens": totals_row["output_tokens"],
+                "total_tokens": totals_row["total_tokens"],
+                "errors": totals_row["errors"],
+            },
+            "recent_sessions": recent,
+        }
 
     def stats(self, instance_id: str, session_id: str) -> Optional[dict]:
         """Whole-log fold with the same shape as the plugin's store."""
