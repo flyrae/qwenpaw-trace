@@ -201,6 +201,29 @@ gzip'd, retried with a disk queue, and can never block the agent
 loop. Instance identity precedence: `remote_instance_id` config >
 `QWENPAW_INSTANCE_ID` env > persisted `traces/.instance-id`.
 
+### Fleet enrollment (many machines, zero per-host tokens)
+
+For fleets, hand out one admin-generated **enrollment key**
+(collector ≥ v0.5.0: portal "设备注册" section or
+`POST /api/agent-trace/admin/enroll-keys`) instead of a token per
+machine:
+
+```json
+{ "remote_enabled": true,
+  "remote_url": "http://collector.internal:8790",
+  "remote_enroll_key": "enroll_..." }
+```
+
+On first load the shipper exchanges the key at `POST /enroll` for an
+**instance-scoped token** (it can only see its own machine's
+sessions) and persists it to `traces/.instance-token`; restarts
+reuse it without re-enrolling. If that token is ever revoked
+server-side, the shipper sees 401, re-enrolls automatically, and
+keeps going. Token precedence: persisted instance token >
+`remote_enroll_key` (first use) > `remote_token`. A rejected key
+(falls back to `remote_token` when set) retries at most once per
+60 s.
+
 ### Configuration via environment variables
 
 Every setting can be stamped with `AGENT_TRACE_<FIELD>` env vars —

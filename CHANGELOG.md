@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.0 (2026-09-16)
+
+- **Fleet enrollment**: a single admin-generated enrollment key
+  (collector ≥ v0.5.0) replaces per-machine tokens. New
+  ``remote_enroll_key`` config (+ ``AGENT_TRACE_REMOTE_ENROLL_KEY``
+  env): on first load the shipper exchanges it at ``POST /enroll``
+  for an instance-scoped token (only its own machine's sessions are
+  visible) persisted to ``traces/.instance-token``; restarts reuse
+  it. A 401 (token revoked server-side) triggers automatic
+  re-enrollment and the batch retries with the fresh token. Token
+  precedence: instance token > enroll key (first use) >
+  ``remote_token``; a rejected key falls back to ``remote_token``
+  and retries at most once per 60 s. ``GET /agent-trace/status``
+  reports the active ``token_source`` (enrolled / manual / none).
+
 ## 0.7.3 (2026-09-16)
 
 - Configuration via environment variables: every setting accepts an

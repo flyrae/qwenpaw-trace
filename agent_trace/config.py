@@ -108,6 +108,11 @@ class TraceConfig:
     remote_enabled: bool = False
     remote_url: str = ""
     remote_token: str = ""
+    # Bootstrap credential for fleet deployments: on first load the
+    # shipper exchanges it at POST /enroll for an instance-scoped
+    # token (persisted to traces/.instance-token). Precedence for
+    # requests: instance token > remote_enroll_key > remote_token.
+    remote_enroll_key: str = ""
     remote_instance_id: str = ""
     remote_batch_max_events: int = 200
     remote_batch_max_bytes: int = 1_000_000
@@ -133,6 +138,9 @@ class TraceConfig:
             "remote_enabled": self.remote_enabled,
             "remote_url": self.remote_url,
             "remote_token": "***" if self.remote_token else "",
+            "remote_enroll_key": (
+                "***" if self.remote_enroll_key else ""
+            ),
             "remote_instance_id": self.remote_instance_id,
             "remote_batch_max_events": self.remote_batch_max_events,
             "remote_batch_max_bytes": self.remote_batch_max_bytes,
@@ -217,6 +225,7 @@ class TraceConfig:
         for key in (
             "remote_url",
             "remote_token",
+            "remote_enroll_key",
             "remote_instance_id",
         ):
             if key in payload:
@@ -225,7 +234,7 @@ class TraceConfig:
                     raise ValueError(f"{key} must be a string")
                 # The masked token round-trips as its placeholder; keep
                 # the stored one unless a real value arrives.
-                if key == "remote_token" and value == "***":
+                if value == "***":
                     continue
                 setattr(self, key, value.strip())
         if "remote_url" in payload and self.remote_url:

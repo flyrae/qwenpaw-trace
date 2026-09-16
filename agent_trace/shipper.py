@@ -31,9 +31,13 @@ logger = logging.getLogger("qwenpaw.plugins.agent_trace")
 
 ENVELOPE_SCHEMA_VERSION = 1
 INSTANCE_ID_FILENAME = ".instance-id"
+INSTANCE_TOKEN_FILENAME = ".instance-token"
 SPILL_FILENAME = ".remote-queue.jsonl"
 _BACKOFF_BASE_S = 1.0
 _BACKOFF_MAX_S = 60.0
+# Re-enroll throttle: a bad/expired enroll key must not turn every
+# flush into an enroll attempt.
+_ENROLL_RETRY_S = 60.0
 
 
 def _plugin_version() -> str:
@@ -108,6 +112,11 @@ class TraceShipper:
         self._failures = 0
         self._shipped = 0
         self._dropped = 0
+        # Enrollment: an admin-issued bootstrap key exchanges for an
+        # instance-scoped token on first use (persisted beside the
+        # trace files, so restarts reuse it without re-enrolling).
+        self._instance_token = self._load_instance_token()
+        self._next_enroll_at = 0.0
         # Connection-state logging: warn once on the down transition
         # (plus a heartbeat every N failures), stay quiet while
         # healthy, and log recovery once.
@@ -122,6 +131,15 @@ class TraceShipper:
             "shipped": self._shipped,
             "dropped": self._dropped,
             "spilled": self._spill_size(),
+            "token_source": (
+                "enrolled"
+                if self._instance_token
+                else (
+                    "manual"
+                    if (self._config.remote_token or "").strip()
+                    else "none"
+                )
+            ),
         }
 
     # ------------------------------------------------------------------
@@ -297,6 +315,15 @@ class TraceShipper:
         url = (self._config.remote_url or "").rstrip("/")
         if not url:
             return False
+        # First use (no persisted token): exchange the bootstrap key
+        # for an instance-scoped token. Best-effort — falls through
+        # to the manual remote_token when enroll is unavailable.
+        if (
+            not self._instance_token
+            and self._enroll_key()
+            and time.monotonic() >= self._next_enroll_at
+        ):
+            await self._enroll()
         body = json.dumps(
             {
                 "schema_version": ENVELOPE_SCHEMA_VERSION,
@@ -310,7 +337,7 @@ class TraceShipper:
             "Content-Type": "application/json",
             "Content-Encoding": "gzip",
         }
-        token = (self._config.remote_token or "").strip()
+        token = self._bearer_token()
         if token:
             headers["Authorization"] = f"Bearer {token}"
         payload = gzip.compress(body)
@@ -325,6 +352,30 @@ class TraceShipper:
             self._last_error = f"{type(exc).__name__}: {exc}"[:200]
             logger.debug("agent-trace: remote ingest unreachable", exc_info=True)
             return False
+        if status == 401 and self._enroll_key():
+            # Our instance token was revoked (server-side rotation or
+            # admin cleanup): re-enroll rotates it server-side, then
+            # retry this batch once with the fresh token.
+            self._instance_token = ""
+            if (
+                time.monotonic() >= self._next_enroll_at
+                and await self._enroll()
+            ):
+                headers["Authorization"] = (
+                    f"Bearer {self._instance_token}"
+                )
+                try:
+                    status = await self._http_post(
+                        f"{url}/ingest",
+                        payload,
+                        headers,
+                        timeout=float(self._config.remote_timeout_s),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self._last_error = (
+                        f"{type(exc).__name__}: {exc}"[:200]
+                    )
+                    return False
         if not 200 <= status < 300:
             self._last_error = f"HTTP {status}"[:200]
             logger.debug(
@@ -332,6 +383,130 @@ class TraceShipper:
             )
             return False
         return True
+
+    # ------------------------------------------------------------------
+    # Enrollment (fleet deployments)
+    # ------------------------------------------------------------------
+
+    def _enroll_key(self) -> str:
+        return (
+            getattr(self._config, "remote_enroll_key", "") or ""
+        ).strip()
+
+    def _load_instance_token(self) -> str:
+        try:
+            return (
+                self._root / INSTANCE_TOKEN_FILENAME
+            ).read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    def _bearer_token(self) -> str:
+        return self._instance_token or (
+            self._config.remote_token or ""
+        ).strip()
+
+    async def _enroll(self) -> bool:
+        """Exchange the bootstrap key at POST /enroll for an
+        instance-scoped token; persist it so restarts reuse it.
+        The server rotates any previous token for this instance, so
+        this doubles as the recovery path after a 401."""
+        url = (self._config.remote_url or "").rstrip("/")
+        key = self._enroll_key()
+        if not url or not key:
+            return False
+        body = json.dumps(
+            self._envelope, ensure_ascii=False, default=str
+        ).encode("utf-8")
+        try:
+            status, text = await self._enroll_post(
+                f"{url}/enroll",
+                body,
+                {
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                },
+                timeout=float(self._config.remote_timeout_s),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("agent-trace: enrollment failed", exc_info=True)
+            self._last_error = f"{type(exc).__name__}: {exc}"[:200]
+            self._next_enroll_at = time.monotonic() + _ENROLL_RETRY_S
+            return False
+        if not 200 <= status < 300:
+            logger.warning(
+                "agent-trace: enrollment rejected (HTTP %s) — check "
+                "remote_enroll_key validity/expiry/uses on the "
+                "collector; falling back to remote_token if set. "
+                "Retrying enrollment in %.0fs.",
+                status,
+                _ENROLL_RETRY_S,
+            )
+            self._next_enroll_at = time.monotonic() + _ENROLL_RETRY_S
+            return False
+        try:
+            token = str(json.loads(text).get("token") or "").strip()
+        except ValueError:
+            token = ""
+        if not token:
+            self._next_enroll_at = time.monotonic() + _ENROLL_RETRY_S
+            return False
+        self._instance_token = token
+        try:
+            self._root.mkdir(parents=True, exist_ok=True)
+            (self._root / INSTANCE_TOKEN_FILENAME).write_text(
+                token, encoding="utf-8"
+            )
+        except OSError:
+            logger.debug(
+                "agent-trace: instance token not persisted "
+                "(read-only root); re-enrolls next restart",
+                exc_info=True,
+            )
+        logger.info(
+            "agent-trace: enrolled instance %s → %s (instance-scoped"
+            " token stored at %s)",
+            self._instance,
+            url,
+            self._root / INSTANCE_TOKEN_FILENAME,
+        )
+        return True
+
+    async def _enroll_post(
+        self,
+        url: str,
+        body: bytes,
+        headers: Dict[str, str],
+        timeout: float,
+    ) -> Tuple[int, str]:
+        """Transport hook for enrollment (plain JSON, no gzip) —
+        returns (status, response body) so HTTP errors carry the
+        server's message."""
+        import urllib.error
+        import urllib.request
+
+        def _do() -> Tuple[int, str]:
+            request = urllib.request.Request(
+                url,
+                data=body,
+                headers=headers,
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(
+                    request, timeout=timeout
+                ) as resp:
+                    return (
+                        resp.status,
+                        resp.read().decode("utf-8", "replace"),
+                    )
+            except urllib.error.HTTPError as exc:
+                return (
+                    exc.code,
+                    exc.read().decode("utf-8", "replace"),
+                )
+
+        return await asyncio.to_thread(_do)
 
     async def _http_post(
         self,
