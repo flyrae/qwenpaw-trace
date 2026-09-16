@@ -65,6 +65,10 @@ class TraceStore:
         self._flush_task: Optional[asyncio.Task] = None
         self._root_ready = False
         self._deleted: set = set()
+        # Optional remote-ship hook (set by the service when a central
+        # collector is configured): receives (session_id, event,
+        # header) after the local buffer append.
+        self.on_event = None
 
     @property
     def root(self) -> Path:
@@ -204,6 +208,7 @@ class TraceStore:
         lines = [
             json.dumps(event, ensure_ascii=False, default=str) + "\n",
         ]
+        header_record: Optional[Dict[str, Any]] = None
         if (
             header is not None
             and session_id not in self._known_files
@@ -227,6 +232,14 @@ class TraceStore:
         self._pending.setdefault(session_id, []).extend(lines)
         if self._flush_event is not None:
             self._flush_event.set()
+        if self.on_event is not None:
+            try:
+                self.on_event(session_id, event, header_record)
+            except Exception:  # pylint: disable=broad-except
+                logger.debug(
+                    "agent-trace: on_event hook failed",
+                    exc_info=True,
+                )
         return seq
 
     async def _write_lines(self, session_id: str, lines: List[str]) -> None:

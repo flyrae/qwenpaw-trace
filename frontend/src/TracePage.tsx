@@ -10,6 +10,7 @@ import { resolveLocale, storedLocale, t } from "./locale";
 import {
   fetchSessionsPage,
   resolveTraceSessionId,
+  sessionRef,
   type SessionSummary,
 } from "./traceApi";
 import { SessionTraceView } from "./SessionTraceView";
@@ -91,11 +92,11 @@ function SessionGroups({
             )}
             {!collapsed &&
               items.map((item) => {
-                const active = item.session_id === selected;
+                const active = sessionRef(item) === selected;
                 return (
                   <div
-                    key={item.session_id}
-                    onClick={() => onSelect(item.session_id)}
+                    key={sessionRef(item)}
+                    onClick={() => onSelect(sessionRef(item))}
                     style={{
                       padding: "8px 10px",
                       marginBottom: 4,
@@ -133,6 +134,15 @@ function SessionGroups({
                           {item.agent_id}
                         </Tag>
                       ) : null}
+                      {item.user_id ? (
+                        <Tag
+                          style={{ marginInlineEnd: 0, fontSize: 10 }}
+                          color="cyan"
+                          title={item.user_id}
+                        >
+                          👤 {item.user_id}
+                        </Tag>
+                      ) : null}
                       <Tag
                         color={STATUS_COLORS[item.status] ?? "default"}
                         style={{ marginInlineEnd: 0 }}
@@ -150,6 +160,15 @@ function SessionGroups({
                       }}
                     >
                       <span>{item.channel || "-"}</span>
+                      {item.instance_id ? (
+                        <span
+                          title={`${item.instance_id}${
+                            item.hostname ? ` (${item.hostname})` : ""
+                          }`}
+                        >
+                          🖥 {item.hostname || item.instance_id}
+                        </span>
+                      ) : null}
                       <span>
                         {item.runs} {t(locale as never, "runs")}
                       </span>
@@ -249,9 +268,14 @@ export function TracePage() {
     try {
       const param = new URLSearchParams(window.location.search).get("session");
       if (param) {
-        void resolveTraceSessionId(param).then((resolved) => {
-          setSelected(resolved ?? param);
-        });
+        if (param.includes("~")) {
+          // Central-mode ref (<instance>~<session>) resolves itself.
+          setSelected(param);
+        } else {
+          void resolveTraceSessionId(param).then((resolved) => {
+            setSelected(resolved ?? param);
+          });
+        }
       }
     } catch {
       /* ignore malformed URLs */
@@ -284,7 +308,8 @@ export function TracePage() {
   }, [loadSessions]);
 
   const selectedSummary = useMemo(
-    () => sessions?.find((item) => item.session_id === selected) ?? null,
+    () =>
+      sessions?.find((item) => sessionRef(item) === selected) ?? null,
     [sessions, selected],
   );
 
@@ -293,7 +318,15 @@ export function TracePage() {
     const needle = sessionSearch.trim().toLowerCase();
     if (!needle) return sessions;
     return sessions.filter((item) =>
-      [item.session_id, item.title ?? "", item.agent_id, item.channel]
+      [
+        item.session_id,
+        item.title ?? "",
+        item.agent_id,
+        item.channel,
+        item.user_id ?? "",
+        item.instance_id ?? "",
+        item.hostname ?? "",
+      ]
         .join(" ")
         .toLowerCase()
         .includes(needle),

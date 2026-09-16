@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Trace — 中央轨迹</title>
+    <link rel="stylesheet" href="./vendor/antd-reset.css" />
+    <style>
+      html,
+      body,
+      #root {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      }
+      .trace-shell-boot {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        color: #888;
+        font-size: 14px;
+      }
+    </style>
+    <!--
+      Standalone host shim: the trace bundle expects the QwenPaw
+      Console host (window.QwenPaw.host). This page provides the same
+      surface from vendored UMD builds so the SAME dist/index.js runs
+      in the Console and standalone.
+
+      Optional overrides before this script:
+        window.__TRACE_API_BASE__  absolute API base (default: same
+                                   origin, paths mapped /x → /api/x)
+        localStorage.trace_token   Bearer token sent with API requests
+    -->
+    <script>
+      (function () {
+        var apiBase =
+          window.__TRACE_API_BASE__ ||
+          window.localStorage.getItem("trace_api_base") ||
+          "";
+        var token = "";
+        try {
+          token = window.localStorage.getItem("trace_token") || "";
+        } catch (e) {
+          /* private mode */
+        }
+        if (!localStorage.getItem("language")) {
+          try {
+            localStorage.setItem(
+              "language",
+              (navigator.language || "en").indexOf("zh") === 0
+                ? "zh-CN"
+                : "en-US",
+            );
+          } catch (e) {
+            /* ignore */
+          }
+        }
+        window.QwenPaw = {
+          host: {
+            React: window.React,
+            antd: window.antd,
+            antdIcons: window.icons,
+            getApiUrl: function (path) {
+              var base = apiBase.replace(/\/+$/, "");
+              if (path.indexOf("/") !== 0) path = "/" + path;
+              return base + "/api" + path;
+            },
+            getApiToken: function () {
+              return token;
+            },
+            useTheme: function () {
+              return "light";
+            },
+          },
+          registerRoutes: function (pluginId, routes) {
+            window.__traceRoutes = routes || [];
+            var mount = function () {
+              var root = document.getElementById("root");
+              if (!root || !window.__traceRoutes.length) return;
+              var path = window.location.pathname.replace(/\/+$/, "") || "/";
+              var route = window.__traceRoutes.filter(function (r) {
+                return r.path === path;
+              })[0];
+              if (!route) route = window.__traceRoutes[0];
+              var ReactDOM = window.ReactDOM;
+              ReactDOM.createRoot(root).render(
+                window.React.createElement(route.component),
+              );
+            };
+            if (document.readyState === "loading") {
+              document.addEventListener("DOMContentLoaded", mount);
+            } else {
+              mount();
+            }
+          },
+        };
+      })();
+    </script>
+    <script src="./vendor/react.production.min.js"></script>
+    <script src="./vendor/react-dom.production.min.js"></script>
+    <script src="./vendor/dayjs.min.js"></script>
+    <script src="./vendor/antd.min.js"></script>
+    <script src="./vendor/icons.umd.min.js"></script>
+    <!-- The shim reads the UMD globals; re-run binding after they load. -->
+    <script>
+      window.QwenPaw.host.React = window.React;
+      window.Qwenpaw = window.QwenPaw;
+      window.QwenPaw.host.antd = window.antd;
+      window.QwenPaw.host.antdIcons = window.icons;
+    </script>
+  </head>
+  <body>
+    <div id="root">
+      <div class="trace-shell-boot">Loading agent-trace…</div>
+    </div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

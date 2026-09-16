@@ -11,6 +11,7 @@ from qwenpaw.constant import WORKING_DIR
 
 from .config import TraceConfig
 from .events import compile_patterns, sanitize_payload
+from .shipper import TraceShipper
 from .store import TraceStore
 
 logger = logging.getLogger("qwenpaw.plugins.agent_trace")
@@ -68,6 +69,11 @@ class TraceService:
         # distinguish a same-position tail replacement (role unchanged)
         # from a prefix rewrite.
         self._last_roles: dict = {}
+        # Remote collector shipper (None unless remote_enabled).
+        self.shipper: Optional[TraceShipper] = None
+        if self.config.remote_enabled and self.config.remote_url:
+            self.shipper = TraceShipper(self.root, self.config)
+            self.store.on_event = self.shipper.enqueue
 
     @property
     def enabled(self) -> bool:
@@ -154,6 +160,13 @@ class TraceService:
     async def start(self) -> None:
         """Recover torn runs, launch the flush task, enforce retention."""
         self.store.start()
+        if self.shipper is not None:
+            self.shipper.start()
+            logger.info(
+                "agent-trace: remote shipping enabled → %s (instance %s)",
+                self.config.remote_url,
+                self.shipper.stats["instance"],
+            )
         recovered = await asyncio.to_thread(
             self.store.recover_interrupted_runs,
         )
@@ -300,6 +313,8 @@ class TraceService:
         if self._cleanup_task is not None:
             self._cleanup_task.cancel()
             self._cleanup_task = None
+        if self.shipper is not None:
+            await self.shipper.stop()
         await self.store.shutdown()
 
     async def delete_session(self, session_id: str) -> bool:

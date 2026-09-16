@@ -2,3 +2,9 @@ node_modules/
 __pycache__/
 .pytest_cache/
 *.zip
+
+# central collector build/runtime artifacts
+server/traces.db
+server/demo-traces.db
+server/ui/vendor/
+server/ui/app.js

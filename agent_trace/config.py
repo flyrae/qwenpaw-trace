@@ -42,6 +42,18 @@ class TraceConfig:
     retention_days: int = 30
     max_total_mb: int = 512
     max_sessions: int = 500
+    # Remote collector (enterprise deployments): ship every event to a
+    # central server after the local append. Local files stay the
+    # source of truth; shipping is best-effort with a disk queue.
+    remote_enabled: bool = False
+    remote_url: str = ""
+    remote_token: str = ""
+    remote_instance_id: str = ""
+    remote_batch_max_events: int = 200
+    remote_batch_max_bytes: int = 1_000_000
+    remote_flush_interval_s: float = 2.0
+    remote_queue_max: int = 10_000
+    remote_timeout_s: float = 5.0
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-serializable snapshot of the settings."""
@@ -58,6 +70,15 @@ class TraceConfig:
             "retention_days": self.retention_days,
             "max_total_mb": self.max_total_mb,
             "max_sessions": self.max_sessions,
+            "remote_enabled": self.remote_enabled,
+            "remote_url": self.remote_url,
+            "remote_token": "***" if self.remote_token else "",
+            "remote_instance_id": self.remote_instance_id,
+            "remote_batch_max_events": self.remote_batch_max_events,
+            "remote_batch_max_bytes": self.remote_batch_max_bytes,
+            "remote_flush_interval_s": self.remote_flush_interval_s,
+            "remote_queue_max": self.remote_queue_max,
+            "remote_timeout_s": self.remote_timeout_s,
         }
 
     def update_from_dict(self, payload: Dict[str, Any]) -> None:
@@ -127,6 +148,67 @@ class TraceConfig:
                         f"invalid redact pattern {pattern!r}: {exc}",
                     ) from exc
             self.redact_patterns = list(patterns)
+        for key in ("remote_enabled",):
+            if key in payload:
+                value = payload[key]
+                if not isinstance(value, bool):
+                    raise ValueError(f"{key} must be a boolean")
+                setattr(self, key, value)
+        for key in (
+            "remote_url",
+            "remote_token",
+            "remote_instance_id",
+        ):
+            if key in payload:
+                value = payload[key]
+                if not isinstance(value, str):
+                    raise ValueError(f"{key} must be a string")
+                # The masked token round-trips as its placeholder; keep
+                # the stored one unless a real value arrives.
+                if key == "remote_token" and value == "***":
+                    continue
+                setattr(self, key, value.strip())
+        if "remote_url" in payload and self.remote_url:
+            if not (
+                self.remote_url.startswith("http://")
+                or self.remote_url.startswith("https://")
+            ):
+                raise ValueError("remote_url must start with http(s)://")
+        if "remote_batch_max_events" in payload:
+            self.remote_batch_max_events = self._clamp_int(
+                payload["remote_batch_max_events"],
+                "remote_batch_max_events",
+                1,
+                10_000,
+            )
+        if "remote_batch_max_bytes" in payload:
+            self.remote_batch_max_bytes = self._clamp_int(
+                payload["remote_batch_max_bytes"],
+                "remote_batch_max_bytes",
+                10_000,
+                50_000_000,
+            )
+        if "remote_flush_interval_s" in payload:
+            self.remote_flush_interval_s = self._clamp_float(
+                payload["remote_flush_interval_s"],
+                "remote_flush_interval_s",
+                0.2,
+                300.0,
+            )
+        if "remote_queue_max" in payload:
+            self.remote_queue_max = self._clamp_int(
+                payload["remote_queue_max"],
+                "remote_queue_max",
+                100,
+                1_000_000,
+            )
+        if "remote_timeout_s" in payload:
+            self.remote_timeout_s = self._clamp_float(
+                payload["remote_timeout_s"],
+                "remote_timeout_s",
+                1.0,
+                120.0,
+            )
 
     @classmethod
     def load(cls, root: Path) -> "TraceConfig":
@@ -176,3 +258,9 @@ class TraceConfig:
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"{name} must be an integer")
         return max(low, min(high, value))
+
+    @staticmethod
+    def _clamp_float(value: Any, name: str, low: float, high: float) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{name} must be a number")
+        return max(low, min(high, float(value)))

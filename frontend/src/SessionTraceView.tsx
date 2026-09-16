@@ -14,6 +14,7 @@ import {
   fetchConfig,
   fetchSessionEvents,
   fetchSessionStats,
+  parseSessionRef,
   updateConfig,
   type SessionDetail,
   type SessionStats,
@@ -189,36 +190,43 @@ export function SessionTraceView({
       .catch(() => setConfig(null));
   }, []);
 
-  const loadDetail = useCallback(async (target: string, beforeSeq?: number) => {
-    if (!beforeSeq) setDetailLoading(true);
-    try {
-      const body = await fetchSessionEvents(target, {
-        beforeSeq,
-        limit: 200,
-      });
-      setError(null);
-      setDetail((prev) => {
-        if (beforeSeq && prev) {
-          return {
-            ...body,
-            events: [...body.events, ...prev.events],
-          };
-        }
-        return body;
-      });
-    } catch (exc) {
-      setError({
-        message: String((exc as Error).message),
-        status: exc instanceof ApiError ? exc.status : null,
-      });
-    } finally {
-      if (!beforeSeq) setDetailLoading(false);
-    }
-  }, []);
+  const loadDetail = useCallback(
+    async (target: string, beforeSeq?: number) => {
+      if (!beforeSeq) setDetailLoading(true);
+      try {
+        // Central-mode refs carry the instance: <instance>~<session>.
+        const { sessionId, instance } = parseSessionRef(target);
+        const body = await fetchSessionEvents(sessionId, {
+          beforeSeq,
+          limit: 200,
+          instance,
+        });
+        setError(null);
+        setDetail((prev) => {
+          if (beforeSeq && prev) {
+            return {
+              ...body,
+              events: [...body.events, ...prev.events],
+            };
+          }
+          return body;
+        });
+      } catch (exc) {
+        setError({
+          message: String((exc as Error).message),
+          status: exc instanceof ApiError ? exc.status : null,
+        });
+      } finally {
+        if (!beforeSeq) setDetailLoading(false);
+      }
+    },
+    [],
+  );
 
   const loadStats = useCallback(async (target: string) => {
     try {
-      const stats = await fetchSessionStats(target);
+      const { sessionId, instance } = parseSessionRef(target);
+      const stats = await fetchSessionStats(sessionId, instance);
       setSessionStats(stats);
       setSessionTotals({
         sessionId: target,
@@ -666,7 +674,12 @@ export function SessionTraceView({
                       size="small"
                       icon={<DownloadOutlined />}
                       onClick={() => {
-                        void exportSessionFile(sessionId)
+                        const { sessionId: rawId, instance } =
+                          parseSessionRef(sessionId);
+                        void exportSessionFile(
+                          rawId,
+                          instance,
+                        )
                           .then(() => message.success(t(locale, "exported")))
                           .catch((exc: Error) =>
                             message.error(String(exc.message)),
@@ -676,23 +689,25 @@ export function SessionTraceView({
                       {t(locale, "export")}
                     </Button>
                   </Tooltip>
-                  <Popconfirm
-                    title={t(locale, "deleteConfirm")}
-                    onConfirm={() => {
-                      void deleteSessionRemote(sessionId)
-                        .then(() => {
-                          message.success(t(locale, "deleted"));
-                          onRefreshSessions?.();
-                        })
-                        .catch((exc: Error) =>
-                          message.error(String(exc.message)),
-                        );
-                    }}
-                  >
-                    <Button size="small" danger icon={<DeleteOutlined />}>
-                      {t(locale, "delete")}
-                    </Button>
-                  </Popconfirm>
+                  {sessionId.includes("~") ? null : (
+                    <Popconfirm
+                      title={t(locale, "deleteConfirm")}
+                      onConfirm={() => {
+                        void deleteSessionRemote(sessionId)
+                          .then(() => {
+                            message.success(t(locale, "deleted"));
+                            onRefreshSessions?.();
+                          })
+                          .catch((exc: Error) =>
+                            message.error(String(exc.message)),
+                          );
+                      }}
+                    >
+                      <Button size="small" danger icon={<DeleteOutlined />}>
+                        {t(locale, "delete")}
+                      </Button>
+                    </Popconfirm>
+                  )}
                 </Space>
               </div>
             </div>

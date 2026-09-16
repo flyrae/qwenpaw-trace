@@ -180,3 +180,22 @@ re-attach the plugin's runtime hooks onto the fresh instances
 log shows `agent-trace: runtime hooks attached to workspace ...`).
 On hosts without that fix, backend changes still require a restart
 to restore capture.
+
+## Enterprise deployment (central collection)
+
+Multiple QwenPaw instances can ship their traces to one central
+collector for unified, per-user viewing:
+
+```bash
+# central server (FastAPI + SQLite, same read API + standalone UI)
+cd server && uvicorn app:app --port 8790      # see server/README.md
+
+# each QwenPaw instance: <WORKING_DIR>/traces/config.json
+{ "remote_enabled": true,
+  "remote_url": "http://collector.internal:8790",
+  "remote_token": "..." }
+```
+
+Local JSONL files stay the source of truth; shipping is batched,
+gzip'd, retried with a disk queue, and can never block the agent loop.
+Full design, deployment modes, and ops notes: [server/README.md](./server/README.md).

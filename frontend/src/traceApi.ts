@@ -19,6 +19,35 @@ export interface SessionSummary {
   size_bytes: number;
   /** Skill loads aggregated per skill name (builtin Skill tool calls). */
   skills?: Record<string, number>;
+  /** Central-collector fields (absent for local sessions). */
+  instance_id?: string;
+  hostname?: string;
+  user_id?: string;
+  event_count?: number;
+}
+
+/**
+ * Central-mode session reference: `<instance>~<session_id>` when the
+ * listing carries an instance identity, plain session id otherwise.
+ */
+export function sessionRef(summary: {
+  session_id: string;
+  instance_id?: string;
+}): string {
+  return summary.instance_id
+    ? `${summary.instance_id}~${summary.session_id}`
+    : summary.session_id;
+}
+
+export function parseSessionRef(
+  ref: string,
+): { sessionId: string; instance?: string } {
+  const tilde = ref.indexOf("~");
+  if (tilde <= 0) return { sessionId: ref };
+  return {
+    instance: ref.slice(0, tilde),
+    sessionId: ref.slice(tilde + 1),
+  };
 }
 
 export interface TraceEvent {
@@ -58,9 +87,11 @@ export interface SessionStats {
 
 export async function fetchSessionStats(
   sessionId: string,
+  instance?: string,
 ): Promise<SessionStats> {
+  const suffix = instance ? `?instance=${encodeURIComponent(instance)}` : "";
   return requestJson<SessionStats>(
-    `/agent-trace/sessions/${encodeURIComponent(sessionId)}/stats`,
+    `/agent-trace/sessions/${encodeURIComponent(sessionId)}/stats${suffix}`,
   );
 }
 
@@ -134,10 +165,16 @@ export interface SessionsPage {
 export async function fetchSessionsPage(options?: {
   limit?: number;
   offset?: number;
+  instance?: string;
+  user?: string;
+  q?: string;
 }): Promise<SessionsPage> {
   const params = new URLSearchParams();
   params.set("limit", String(options?.limit ?? 100));
   if (options?.offset) params.set("offset", String(options.offset));
+  if (options?.instance) params.set("instance", options.instance);
+  if (options?.user) params.set("user", options.user);
+  if (options?.q) params.set("q", options.q);
   return requestJson<SessionsPage>(
     `/agent-trace/sessions?${params.toString()}`,
   );
@@ -157,13 +194,14 @@ export async function fetchSessions(): Promise<SessionSummary[]> {
 
 export async function fetchSessionEvents(
   sessionId: string,
-  options?: { beforeSeq?: number; limit?: number },
+  options?: { beforeSeq?: number; limit?: number; instance?: string },
 ): Promise<SessionDetail> {
   const params = new URLSearchParams();
   if (options?.beforeSeq) {
     params.set("before_seq", String(options.beforeSeq));
   }
   params.set("limit", String(options?.limit ?? 200));
+  if (options?.instance) params.set("instance", options.instance);
   const query = params.toString();
   return requestJson<SessionDetail>(
     `/agent-trace/sessions/${encodeURIComponent(sessionId)}?${query}`,
@@ -184,9 +222,15 @@ export async function updateConfig(
   });
 }
 
-export async function exportSessionFile(sessionId: string): Promise<void> {
+export async function exportSessionFile(
+  sessionId: string,
+  instance?: string,
+): Promise<void> {
+  const suffix = instance
+    ? `?instance=${encodeURIComponent(instance)}`
+    : "";
   const response = await requestRaw(
-    `/agent-trace/sessions/${encodeURIComponent(sessionId)}/export`,
+    `/agent-trace/sessions/${encodeURIComponent(sessionId)}/export${suffix}`,
   );
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const blob = await response.blob();
