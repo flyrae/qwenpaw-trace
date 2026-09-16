@@ -33,6 +33,9 @@ Central collection for enterprise deployments.
 - **Session list** gains user (👤 channel user_id) and instance
   (🖥 hostname) badges; central deep links use
   `?session=<instance>~<session_id>`.
+- Instance identity can come from the `QWENPAW_INSTANCE_ID`
+  environment variable (precedence: config `remote_instance_id` >
+  env > persisted `.instance-id`).
 - Tests: 12 shipper cases, 10 server cases, and a 16-check
   end-to-end smoke (real shipper → real server → API → UI shell).
 
