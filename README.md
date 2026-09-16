@@ -200,3 +200,23 @@ Local JSONL files stay the source of truth; shipping is batched,
 gzip'd, retried with a disk queue, and can never block the agent
 loop. Instance identity precedence: `remote_instance_id` config >
 `QWENPAW_INSTANCE_ID` env > persisted `traces/.instance-id`.
+
+### Configuration via environment variables
+
+Every setting can be stamped with `AGENT_TRACE_<FIELD>` env vars —
+they override `traces/config.json` at load time (file stays the base,
+env wins; runtime REST config updates persist to the file and are
+re-overridden by env on the next restart):
+
+```bash
+AGENT_TRACE_REMOTE_ENABLED=true \
+AGENT_TRACE_REMOTE_URL=http://collector.internal:8790 \
+AGENT_TRACE_REMOTE_TOKEN=$TOKEN \
+AGENT_TRACE_ENABLED=false        # pause recording without touching files
+```
+
+Booleans take `1/true/yes/on` (and negatives), numbers are clamped to
+the same ranges as the REST config, invalid values log a warning and
+are skipped — env can never crash the plugin. `redact_patterns`
+(list) stays file-only. Secrets note: `AGENT_TRACE_REMOTE_TOKEN`
+keeps the token out of the on-disk config.

@@ -19,6 +19,66 @@ logger = logging.getLogger("qwenpaw.plugins.agent_trace")
 
 CONFIG_FILENAME = "config.json"
 
+# Environment overrides: AGENT_TRACE_<FIELD> wins over config.json
+# (e.g. AGENT_TRACE_REMOTE_URL / AGENT_TRACE_REMOTE_TOKEN /
+# AGENT_TRACE_ENABLED). Values are parsed by the field's default type;
+# invalid ones log a warning and are skipped — env must never crash
+# the plugin. List fields (redact_patterns) are not env-configurable.
+_ENV_PREFIX = "AGENT_TRACE_"
+_ENV_TRUE = {"1", "true", "yes", "on"}
+_ENV_FALSE = {"0", "false", "no", "off"}
+
+
+def _env_overrides() -> Dict[str, Any]:
+    """Collect AGENT_TRACE_* overrides, coerced to field types."""
+    import os
+
+    defaults = TraceConfig()
+    overrides: Dict[str, Any] = {}
+    for name, raw in os.environ.items():
+        if not name.startswith(_ENV_PREFIX):
+            continue
+        key = name[len(_ENV_PREFIX):].lower()
+        if not hasattr(defaults, key) or key == "redact_patterns":
+            continue
+        value = raw.strip()
+        if value == "":
+            continue
+        current = getattr(defaults, key)
+        try:
+            if isinstance(current, bool):
+                lowered = value.lower()
+                if lowered in _ENV_TRUE:
+                    overrides[key] = True
+                elif lowered in _ENV_FALSE:
+                    overrides[key] = False
+                else:
+                    raise ValueError(f"not a boolean: {value!r}")
+            elif isinstance(current, int) and not isinstance(current, bool):
+                overrides[key] = int(value)
+            elif isinstance(current, float):
+                overrides[key] = float(value)
+            else:
+                overrides[key] = value
+        except ValueError:
+            logger.warning(
+                "agent-trace: ignoring invalid env override %s=%r",
+                name,
+                value,
+            )
+    # URL shape is validated up-front so update_from_dict never ends
+    # up half-applied with a bad remote_url.
+    if "remote_url" in overrides and not str(
+        overrides["remote_url"]
+    ).startswith(("http://", "https://")):
+        logger.warning(
+            "agent-trace: ignoring AGENT_TRACE_REMOTE_URL (must start"
+            " with http(s)://): %r",
+            overrides["remote_url"],
+        )
+        overrides.pop("remote_url")
+    return overrides
+
 _MIN_PAYLOAD_CHARS = 100
 _MAX_PAYLOAD_CHARS = 200_000
 _MAX_RETENTION_DAYS = 3650
@@ -212,29 +272,45 @@ class TraceConfig:
 
     @classmethod
     def load(cls, root: Path) -> "TraceConfig":
-        """Load settings from ``root/config.json``, falling back to
-        defaults when the file is missing or unreadable."""
+        """Load settings from ``root/config.json`` (defaults when the
+        file is missing/unreadable), then apply ``AGENT_TRACE_*``
+        environment overrides on top (deployment stamps config via
+        env; file values stay as the base)."""
         config = cls()
         path = Path(root) / CONFIG_FILENAME
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            return config
+            raw = None
         except (OSError, json.JSONDecodeError):
             logger.warning(
                 "agent-trace: unreadable config %s; using defaults",
                 path,
             )
-            return config
-        try:
-            config.update_from_dict(raw)
-        except ValueError as exc:
-            logger.warning(
-                "agent-trace: invalid config %s (%s); using defaults",
-                path,
-                exc,
+            raw = None
+        if raw is not None:
+            try:
+                config.update_from_dict(raw)
+            except ValueError as exc:
+                logger.warning(
+                    "agent-trace: invalid config %s (%s); using defaults",
+                    path,
+                    exc,
+                )
+                config = cls()
+        overrides = _env_overrides()
+        if overrides:
+            logger.info(
+                "agent-trace: env overrides applied: %s",
+                ", ".join(sorted(overrides)),
             )
-            return cls()
+            try:
+                config.update_from_dict(overrides)
+            except ValueError as exc:
+                logger.warning(
+                    "agent-trace: invalid env override ignored (%s)",
+                    exc,
+                )
         return config
 
     def save(self, root: Path) -> None:

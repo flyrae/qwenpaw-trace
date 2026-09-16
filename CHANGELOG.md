@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.3 (2026-09-16)
+
+- Configuration via environment variables: every setting accepts an
+  AGENT_TRACE_<FIELD> override (env > config.json > defaults at
+  load time) — e.g. AGENT_TRACE_REMOTE_URL /
+  AGENT_TRACE_REMOTE_TOKEN / AGENT_TRACE_ENABLED. Booleans
+  take 1/true/yes/on, numbers clamp to the REST ranges, invalid
+  values warn and are skipped (env can never crash the plugin);
+  redact_patterns stays file-only. Env-based tokens keep secrets
+  off the on-disk config.
+
 ## 0.7.2 (2026-09-16)
 
 - Remote-shipping observability: connection failures now log at

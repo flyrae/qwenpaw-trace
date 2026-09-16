@@ -292,3 +292,68 @@ class TestConfigRemote:
         assert config.remote_flush_interval_s == 0.2
         config.update_from_dict({"remote_queue_max": 5_000_000})
         assert config.remote_queue_max == 1_000_000
+
+
+class TestEnvOverrides:
+    def _load_with(self, tmp_path, file_body, **env):
+        import json as _json
+        from agent_trace.config import TraceConfig
+
+        if file_body is not None:
+            (tmp_path / "config.json").write_text(
+                _json.dumps(file_body), encoding="utf-8"
+            )
+        import os
+        for key, value in env.items():
+            os.environ[key] = value
+        try:
+            return TraceConfig.load(tmp_path)
+        finally:
+            for key in env:
+                os.environ.pop(key, None)
+
+    def test_env_beats_file(self, tmp_path):
+        config = self._load_with(
+            tmp_path,
+            {"remote_url": "http://from-file:1"},
+            AGENT_TRACE_REMOTE_URL="http://from-env:2",
+            AGENT_TRACE_ENABLED="0",
+        )
+        assert config.remote_url == "http://from-env:2"
+        assert config.enabled is False
+
+    def test_file_used_when_env_unset(self, tmp_path):
+        config = self._load_with(
+            tmp_path, {"remote_url": "http://from-file:1"}
+        )
+        assert config.remote_url == "http://from-file:1"
+
+    def test_invalid_values_skipped(self, tmp_path):
+        config = self._load_with(
+            tmp_path,
+            {"max_payload_chars": 4000},
+            AGENT_TRACE_MAX_PAYLOAD_CHARS="not-a-number",
+            AGENT_TRACE_ENABLED="maybe",
+            AGENT_TRACE_REMOTE_URL="ftp://nope",
+        )
+        assert config.max_payload_chars == 4000
+        assert config.enabled is True
+        assert config.remote_url == ""
+
+    def test_boolean_forms_and_clamps(self, tmp_path):
+        config = self._load_with(
+            tmp_path,
+            None,
+            AGENT_TRACE_REMOTE_ENABLED="yes",
+            AGENT_TRACE_REMOTE_FLUSH_INTERVAL_S="0.001",
+            AGENT_TRACE_REMOTE_QUEUE_MAX="99999999",
+        )
+        assert config.remote_enabled is True
+        assert config.remote_flush_interval_s == 0.2
+        assert config.remote_queue_max == 1_000_000
+
+    def test_unknown_prefix_ignored(self, tmp_path):
+        config = self._load_with(
+            tmp_path, None, AGENT_TRACE_NO_SUCH_FIELD="1"
+        )
+        assert config.enabled is True
