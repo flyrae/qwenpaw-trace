@@ -38,6 +38,9 @@ _BACKOFF_MAX_S = 60.0
 # Re-enroll throttle: a bad/expired enroll key must not turn every
 # flush into an enroll attempt.
 _ENROLL_RETRY_S = 60.0
+# Idle spill-drain cadence: without new events nothing would ever
+# trigger a drain, so the flush tick retries the spill on its own.
+_SPILL_DRAIN_RETRY_S = 30.0
 
 
 def _plugin_version() -> str:
@@ -117,6 +120,7 @@ class TraceShipper:
         # trace files, so restarts reuse it without re-enrolling).
         self._instance_token = self._load_instance_token()
         self._next_enroll_at = 0.0
+        self._next_spill_drain_at = 0.0
         # Connection-state logging: warn once on the down transition
         # (plus a heartbeat every N failures), stay quiet while
         # healthy, and log recovery once.
@@ -224,6 +228,19 @@ class TraceShipper:
                 continue
             try:
                 await self._flush_once()
+                # Idle spill drain: a drain normally rides along
+                # after a successful batch, but with no new events
+                # the spill tail would wait forever for the next
+                # session — retry it on the tick, throttled.
+                if (
+                    not self._queue
+                    and now >= self._next_spill_drain_at
+                    and self._spill_size() > 0
+                ):
+                    self._next_spill_drain_at = (
+                        now + _SPILL_DRAIN_RETRY_S
+                    )
+                    await self._drain_spill()
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
@@ -556,15 +573,18 @@ class TraceShipper:
         except OSError:
             return 0
 
-    async def _drain_spill(self) -> None:
-        """Re-send previously spilled events after connectivity returns."""
+    async def _drain_spill(self) -> bool:
+        """Re-send previously spilled events after connectivity
+        returns. A failure keeps the file and surfaces through the
+        same connection logging as live batches (an invalid token,
+        for instance, must not fail silently forever)."""
         path = self._spill_path()
         if not path.exists():
-            return
+            return False
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
         except OSError:
-            return
+            return False
         records: List[Dict[str, Any]] = []
         for line in lines:
             line = line.strip()
@@ -579,10 +599,15 @@ class TraceShipper:
                 path.unlink()
             except OSError:
                 pass
-            return
+            return False
         if await self._post(records):
             self._shipped += len(records)
             try:
                 path.unlink()
             except OSError:
                 pass
+            self._log_state(connected=True)
+            return True
+        self._failures += 1
+        self._log_state(connected=False)
+        return False

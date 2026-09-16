@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.1 (2026-09-16)
+
+- **Fix: the shipper's disk-spill queue no longer masquerades as a
+  session.** ``list_sessions``/``cleanup``/interrupt-recovery globbed
+  ``*.jsonl`` in the traces directory and pathlib matches hidden
+  dotfiles, so ``.remote-queue.jsonl`` (holding a full copy of one
+  session's events after a collector outage) surfaced as a duplicate
+  session entry — same title, timestamp, and token totals as the
+  real one. Hidden dotfiles are now excluded everywhere.
+- **Fix: the spill queue now drains without new events.** Draining
+  previously only rode along after a successful live batch, so the
+  tail of a spill could wait forever for the next session. The flush
+  tick now retries the spill on its own (throttled to 30 s), and a
+  failed drain surfaces through the same connection logging as live
+  batches — an invalid token no longer fails silently forever.
+
 ## 0.8.0 (2026-09-16)
 
 - **Fleet enrollment**: a single admin-generated enrollment key

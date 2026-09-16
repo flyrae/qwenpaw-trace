@@ -146,6 +146,47 @@ class TestShipper:
         assert spill.exists()
         assert shipper.stats["spilled"] == 1
 
+    async def test_idle_drain_retries_spill_without_new_events(
+        self, tmp_path
+    ):
+        # A spill left behind (e.g. the collector was down) must not
+        # wait for the next session: the flush tick drains it alone.
+        spill = tmp_path / SPILL_FILENAME
+        spill.write_text(
+            json.dumps({"session_id": "sess-1", **_event(1)}) + "\n",
+            encoding="utf-8",
+        )
+        shipper = TraceShipper(
+            tmp_path, _config(remote_flush_interval_s=0.05)
+        )
+        transport = _Transport()
+        shipper._http_post = transport  # pylint: disable=protected-access
+        shipper.start()
+        for _ in range(100):
+            if transport.posts:
+                break
+            await asyncio.sleep(0.05)
+        assert transport.posts, "spill was never drained"
+        assert not spill.exists()
+        await shipper.stop()
+
+    async def test_idle_drain_failure_keeps_spill(self, tmp_path):
+        spill = tmp_path / SPILL_FILENAME
+        spill.write_text(
+            json.dumps({"session_id": "sess-1", **_event(1)}) + "\n",
+            encoding="utf-8",
+        )
+        shipper = TraceShipper(
+            tmp_path, _config(remote_flush_interval_s=0.05)
+        )
+        transport = _Transport()
+        transport.fail_next = 999  # every post fails
+        shipper._http_post = transport  # pylint: disable=protected-access
+        shipper.start()
+        await asyncio.sleep(0.3)
+        assert spill.exists()  # kept for the throttled retry
+        await shipper.stop()
+
     async def test_queue_cap_drops_oldest(self, tmp_path):
         config = _config(remote_queue_max=3)
         shipper = TraceShipper(tmp_path, config)

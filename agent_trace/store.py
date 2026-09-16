@@ -75,6 +75,20 @@ class TraceStore:
         """Directory holding the ``*.jsonl`` session files."""
         return self._root
 
+    def _session_files(self) -> List[Path]:
+        """Session JSONL files — hidden dotfiles sharing the directory
+        (the shipper's ``.remote-queue.jsonl`` spill, ``.instance-id``,
+        ...) are never sessions and must not be listed, cleaned up, or
+        summarized as one."""
+        try:
+            return [
+                path
+                for path in self._root.glob("*.jsonl")
+                if not path.name.startswith(".")
+            ]
+        except OSError:
+            return []
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -118,10 +132,7 @@ class TraceStore:
         Runs opened by *this* process are never touched.
         """
         recovered = 0
-        try:
-            paths = list(self._root.glob("*.jsonl"))
-        except OSError:
-            return 0
+        paths = self._session_files()
         for path in paths:
             session_id = path.stem
             session = self.read_session(session_id)
@@ -396,11 +407,7 @@ class TraceStore:
     def list_sessions(self) -> List[Dict[str, Any]]:
         """Summarize every session file, newest activity first."""
         summaries: List[Dict[str, Any]] = []
-        try:
-            paths = list(self._root.glob("*.jsonl"))
-        except OSError:
-            return []
-        for path in paths:
+        for path in self._session_files():
             summary = self._summarize_file(path)
             if summary is not None:
                 summaries.append(summary)
@@ -710,10 +717,7 @@ class TraceStore:
         removed: List[str] = []
         now = time.time()
         cutoff = now - self._config.retention_days * 86400.0
-        try:
-            paths = list(self._root.glob("*.jsonl"))
-        except OSError:
-            return removed
+        paths = self._session_files()
         kept: List[Path] = []
         for path in paths:
             try:

@@ -183,6 +183,37 @@ class TestListSessions:
         store = make_store(tmp_path)
         assert store.list_sessions() == []
 
+    async def test_hidden_files_are_not_sessions(self, tmp_path):
+        # The shipper's disk-spill queue and identity files share the
+        # traces directory; a spill holding a copy of a session's
+        # events must never surface as a duplicate session entry.
+        await write_run(make_store(tmp_path), "sess-real")
+        spill = tmp_path / ".remote-queue.jsonl"
+        spill.write_text(
+            json.dumps(
+                {
+                    "session_id": "sess-real",
+                    "seq": 0,
+                    "t": "2026-09-16T00:00:00.000+00:00",
+                    "type": "session",
+                    "run_id": "",
+                    "data": {"query": "hi"},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (tmp_path / ".instance-id").write_text("abc123", encoding="utf-8")
+        store = make_store(tmp_path)
+        sessions = store.list_sessions()
+        assert [s["session_id"] for s in sessions] == ["sess-real"]
+        # Retention must not delete the spill either, however old.
+        store._config.retention_days = 1  # pylint: disable=protected-access
+        os.utime(spill, (1000, 1000))
+        removed = store.cleanup()
+        assert removed == []
+        assert spill.exists()
+
 
 class TestDeleteExport:
     async def test_delete_removes_file_and_buffers(self, tmp_path):
