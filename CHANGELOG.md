@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.2 (2026-09-16)
+
+- Remote-shipping observability: connection failures now log at
+  WARNING (first failure + a heartbeat every 20th, with target, error,
+  backoff and disk-queue depth), recovery logs once at INFO with the
+  drained spill count; steady state stays silent. New
+  GET /agent-trace/status exposes shipper counters (queued /
+  shipped / dropped / spilled) for ops checks without log access.
+
 ## 0.7.1 (2026-09-16)
 
 - A missing ``wrapt`` no longer fails the plugin load: the wire-level

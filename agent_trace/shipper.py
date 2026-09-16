@@ -108,6 +108,11 @@ class TraceShipper:
         self._failures = 0
         self._shipped = 0
         self._dropped = 0
+        # Connection-state logging: warn once on the down transition
+        # (plus a heartbeat every N failures), stay quiet while
+        # healthy, and log recovery once.
+        self._was_connected: Optional[bool] = None
+        self._last_error = ""
 
     @property
     def stats(self) -> Dict[str, Any]:
@@ -215,10 +220,21 @@ class TraceShipper:
             return
         ok = await self._post(batch)
         if ok:
+            recovered = self._failures > 0
             self._failures = 0
             self._shipped += len(batch)
+            spilled_before = self._spill_size()
             # Opportunistically drain an earlier spill.
             await self._drain_spill()
+            if recovered:
+                logger.info(
+                    "agent-trace: remote shipping recovered → %s "
+                    "(batch %d, spill queue drained: %d)",
+                    self._config.remote_url,
+                    len(batch),
+                    spilled_before,
+                )
+            self._log_state(connected=True)
             return
         self._failures += 1
         delay = min(
@@ -227,6 +243,34 @@ class TraceShipper:
         )
         self._next_attempt_at = time.monotonic() + delay
         self._spill(batch)
+        self._log_state(connected=False, delay=delay)
+
+    def _log_state(self, connected: bool, delay: float = 0.0) -> None:
+        """Transition-aware connection logging.
+
+        First failure (and every 20th after that) logs at WARNING with
+        the actionable bits — target, error, backoff, disk-queue size;
+        steady-state success stays silent; recovery logs once at INFO.
+        """
+        if connected:
+            self._was_connected = True
+            return
+        streak = self._failures
+        if self._was_connected is not False or streak % 20 == 1:
+            stats = self.stats
+            logger.warning(
+                "agent-trace: remote ingest unreachable → %s "
+                "(%s); retrying in %.0fs, %d event(s) queued to the "
+                "disk spill (total shipped %d, dropped %d). Local "
+                "recording is unaffected.",
+                self._config.remote_url,
+                self._last_error or "connection failed",
+                delay,
+                stats["spilled"],
+                stats["shipped"],
+                stats["dropped"],
+            )
+        self._was_connected = False
 
     def _take_batch(self) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Split the queue into one sendable batch + remainder.
@@ -277,10 +321,17 @@ class TraceShipper:
                 headers,
                 timeout=float(self._config.remote_timeout_s),
             )
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            self._last_error = f"{type(exc).__name__}: {exc}"[:200]
             logger.debug("agent-trace: remote ingest unreachable", exc_info=True)
             return False
-        return 200 <= status < 300
+        if not 200 <= status < 300:
+            self._last_error = f"HTTP {status}"[:200]
+            logger.debug(
+                "agent-trace: remote ingest rejected with HTTP %s", status
+            )
+            return False
+        return True
 
     async def _http_post(
         self,

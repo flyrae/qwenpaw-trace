@@ -72,6 +72,15 @@ def build_router() -> APIRouter:
 
     router.add_api_route("/resolve", _resolve_chat, methods=["GET"])
 
+    @router.get("/status")
+    async def get_status() -> Dict[str, Any]:
+        """Shipping health: queue depths and counters (central mode)."""
+        service = _require_service()
+        return {
+            "enabled": service.enabled,
+            "shipping": service.shipper.stats if service.shipper else None,
+        }
+
     @router.get("/sessions/{session_id}")
     async def get_session(
         session_id: str,

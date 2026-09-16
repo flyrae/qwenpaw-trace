@@ -211,6 +211,63 @@ class TestStoreWiring:
         await service.shutdown()
 
 
+class TestConnectionLogging:
+    async def _capture(self):
+        import logging
+
+        messages: list = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record):
+                messages.append(
+                    (record.levelname, record.getMessage())
+                )
+
+        capture = _Capture(level=logging.INFO)
+        logger = logging.getLogger("qwenpaw.plugins.agent_trace")
+        logger.addHandler(capture)
+        return logger, capture, messages
+
+    async def test_failure_warns_once_then_heartbeat(self, tmp_path):
+        shipper = TraceShipper(tmp_path, _config())
+        transport = _Transport()
+        transport.fail_next = 45  # never succeeds
+        shipper._http_post = transport  # pylint: disable=protected-access
+        logger, capture, messages = await self._capture()
+        try:
+            for _ in range(45):
+                shipper.enqueue("sess-1", _event(1))
+                await shipper._flush_once()  # pylint: disable=protected-access
+        finally:
+            logger.removeHandler(capture)
+        warnings = [m for lvl, m in messages if lvl == "WARNING"]
+        # First failure + every 20th (1st, 21st, 41st) — not 45.
+        assert len(warnings) == 3, [m[:80] for m in warnings]
+        assert "remote ingest unreachable" in warnings[0]
+        assert "disk spill" in warnings[0]
+
+    async def test_recovery_logs_once(self, tmp_path):
+        shipper = TraceShipper(tmp_path, _config())
+        transport = _Transport()
+        shipper._http_post = transport  # pylint: disable=protected-access
+        logger, capture, messages = await self._capture()
+        try:
+            transport.fail_next = 1
+            shipper.enqueue("sess-1", _event(1))
+            await shipper._flush_once()  # pylint: disable=protected-access
+            transport.fail_next = 0
+            shipper.enqueue("sess-1", _event(2))
+            await shipper._flush_once()  # pylint: disable=protected-access
+            shipper.enqueue("sess-1", _event(3))
+            await shipper._flush_once()  # pylint: disable=protected-access
+        finally:
+            logger.removeHandler(capture)
+        infos = [m for lvl, m in messages if lvl == "INFO"]
+        recoveries = [m for m in infos if "recovered" in m]
+        assert len(recoveries) == 1, infos
+        assert "spill queue drained: 1" in recoveries[0]
+
+
 class TestConfigRemote:
     def test_roundtrip_masks_token(self, tmp_path):
         config = _config()

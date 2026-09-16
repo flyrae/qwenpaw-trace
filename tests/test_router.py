@@ -88,6 +88,22 @@ class TestSessions:
         assert body["total"] == 0
         assert body["has_more"] is False
 
+    async def test_status_without_shipper(self, client):
+        response = await client.get("/agent-trace/status")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["enabled"] is True
+        assert body["shipping"] is None
+
+    async def test_status_with_shipper(self, client, service, tmp_path):
+        service.shipper = SimpleNamespace(
+            stats={"instance": "x", "queued": 1, "shipped": 2,
+                   "dropped": 0, "spilled": 0},
+        )
+        response = await client.get("/agent-trace/status")
+        assert response.status_code == 200
+        assert response.json()["shipping"]["queued"] == 1
+
     async def test_skill_loads_aggregated(self, client, service):
         await seed_session(service)
         await seed_skill_load(service, skill="browser-zh")
