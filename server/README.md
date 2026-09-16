@@ -50,8 +50,9 @@ TRACE_DB=./traces.db TRACE_TOKEN=一个长随机串 \
 - **绝不阻塞智能体**：推送路径任何异常都只记 debug 日志；
 - **幂等**：按 `(instance, session, seq)` 去重，重复推送无副作用。
 
-实例身份：首次生成 UUID 持久化在 `<WORKING_DIR>/traces/.instance-id`，
-可用 `remote_instance_id` 显式指定（如 `edge-shanghai`）。
+实例身份优先级：config `remote_instance_id` > 环境变量
+`QWENPAW_INSTANCE_ID`（容器/服务部署推荐）> 首次生成 UUID 持久化在
+`<WORKING_DIR>/traces/.instance-id`。
 
 ## 3. UI（独立部署）
 

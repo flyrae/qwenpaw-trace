@@ -20,6 +20,7 @@ import asyncio
 import gzip
 import json
 import logging
+import os
 import socket
 import time
 import uuid
@@ -55,12 +56,18 @@ def _plugin_version() -> str:
 def resolve_instance_id(root: Path, configured: str = "") -> str:
     """Stable per-installation identity.
 
-    An explicit config value wins; otherwise a UUID is generated once
-    and persisted next to the trace files so restarts keep identity.
+    Precedence: an explicit ``remote_instance_id`` config value wins;
+    then the ``QWENPAW_INSTANCE_ID`` environment variable (container
+    / service deployments stamp identity via env); then a UUID
+    generated once and persisted next to the trace files so restarts
+    keep identity.
     """
     configured = (configured or "").strip()
     if configured:
         return configured
+    env_id = (os.environ.get("QWENPAW_INSTANCE_ID") or "").strip()
+    if env_id:
+        return env_id
     path = Path(root) / INSTANCE_ID_FILENAME
     existing = ""
     try:

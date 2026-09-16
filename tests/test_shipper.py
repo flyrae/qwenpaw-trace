@@ -74,6 +74,24 @@ class TestInstanceIdentity:
             resolve_instance_id(tmp_path, "prod-7") == "prod-7"
         )
 
+    def test_env_var_used_when_config_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QWENPAW_INSTANCE_ID", "pod-abc-123")
+        assert resolve_instance_id(tmp_path) == "pod-abc-123"
+
+    def test_config_beats_env_var(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QWENPAW_INSTANCE_ID", "from-env")
+        assert resolve_instance_id(tmp_path, "from-config") == "from-config"
+
+    def test_env_var_beats_persisted_file(self, tmp_path, monkeypatch):
+        resolve_instance_id(tmp_path)  # writes .instance-id
+        monkeypatch.setenv("QWENPAW_INSTANCE_ID", "docker-42")
+        assert resolve_instance_id(tmp_path) == "docker-42"
+
+    def test_blank_env_var_ignored(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("QWENPAW_INSTANCE_ID", "   ")
+        first = resolve_instance_id(tmp_path)
+        assert first and first != "   "
+
 
 class TestShipper:
     async def test_envelope_and_auth(self, tmp_path):
