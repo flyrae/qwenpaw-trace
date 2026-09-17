@@ -218,6 +218,14 @@ machine:
   "remote_enroll_key": "enroll_..." }
 ```
 
+Or purely via env (containers / systemd / fleet provisioning):
+
+```bash
+AGENT_TRACE_REMOTE_ENABLED=true \
+AGENT_TRACE_REMOTE_URL=http://collector.internal:8790 \
+AGENT_TRACE_REMOTE_ENROLL_KEY=enroll_...
+```
+
 On first load the shipper exchanges the key at `POST /enroll` for an
 **instance-scoped token** (it can only see its own machine's
 sessions) and persists it to `traces/.instance-token`; restarts
@@ -236,14 +244,52 @@ env wins; runtime REST config updates persist to the file and are
 re-overridden by env on the next restart):
 
 ```bash
+# Central collection with a hand-issued token:
 AGENT_TRACE_REMOTE_ENABLED=true \
 AGENT_TRACE_REMOTE_URL=http://collector.internal:8790 \
-AGENT_TRACE_REMOTE_TOKEN=$TOKEN \
+AGENT_TRACE_REMOTE_TOKEN=$TOKEN
+
+# Fleet enrollment (collector ≥ v0.5.0): stamp the bootstrap key via
+# env — ideal for containers/systemd units where config.json is not
+# writable at provision time. The instance token it exchanges for is
+# persisted to traces/.instance-token, not the env.
+AGENT_TRACE_REMOTE_ENABLED=true \
+AGENT_TRACE_REMOTE_URL=http://collector.internal:8790 \
+AGENT_TRACE_REMOTE_ENROLL_KEY=$ENROLL_KEY \
+AGENT_TRACE_REMOTE_INSTANCE_ID=edge-sh-01   # optional, stable identity
+
 AGENT_TRACE_ENABLED=false        # pause recording without touching files
 ```
 
 Booleans take `1/true/yes/on` (and negatives), numbers are clamped to
 the same ranges as the REST config, invalid values log a warning and
 are skipped — env can never crash the plugin. `redact_patterns`
-(list) stays file-only. Secrets note: `AGENT_TRACE_REMOTE_TOKEN`
-keeps the token out of the on-disk config.
+(list) stays file-only. Secrets note: `AGENT_TRACE_REMOTE_TOKEN` /
+`AGENT_TRACE_REMOTE_ENROLL_KEY` keep credentials out of the on-disk
+config.
+
+Full variable reference (all override `traces/config.json`):
+
+| Env variable | Type / default | Purpose |
+|---|---|---|
+| `AGENT_TRACE_ENABLED` | bool / `true` | master recording switch |
+| `AGENT_TRACE_CAPTURE_LLM` | bool / `true` | LLM call/result events |
+| `AGENT_TRACE_CAPTURE_TOOLS` | bool / `true` | tool call/result events |
+| `AGENT_TRACE_CAPTURE_HEADERS` | bool / `true` | request header capture |
+| `AGENT_TRACE_CAPTURE_APPROVALS` | bool / `true` | approval events |
+| `AGENT_TRACE_CAPTURE_MESSAGES` | bool / `true` | message in/out events |
+| `AGENT_TRACE_MAX_PAYLOAD_CHARS` | int / `4000` | per-event payload cap |
+| `AGENT_TRACE_MAX_PROMPT_CHARS` | int / `200000` | prompt text cap |
+| `AGENT_TRACE_RETENTION_DAYS` | int / `30` | local session retention |
+| `AGENT_TRACE_MAX_TOTAL_MB` | int / `512` | local storage budget |
+| `AGENT_TRACE_MAX_SESSIONS` | int / `500` | max kept session files |
+| `AGENT_TRACE_REMOTE_ENABLED` | bool / `false` | turn on the shipper |
+| `AGENT_TRACE_REMOTE_URL` | str / — | collector base URL (http(s)://) |
+| `AGENT_TRACE_REMOTE_TOKEN` | str / — | hand-issued bearer token |
+| `AGENT_TRACE_REMOTE_ENROLL_KEY` | str / — | bootstrap key → instance-scoped token (≥ v0.8.0) |
+| `AGENT_TRACE_REMOTE_INSTANCE_ID` | str / — | stable instance identity |
+| `AGENT_TRACE_REMOTE_BATCH_MAX_EVENTS` | int / `200` | events per batch |
+| `AGENT_TRACE_REMOTE_BATCH_MAX_BYTES` | int / `1000000` | bytes per batch |
+| `AGENT_TRACE_REMOTE_FLUSH_INTERVAL_S` | float / `2.0` | flush cadence |
+| `AGENT_TRACE_REMOTE_QUEUE_MAX` | int / `10000` | in-memory queue cap |
+| `AGENT_TRACE_REMOTE_TIMEOUT_S` | float / `5.0` | per-request timeout |
