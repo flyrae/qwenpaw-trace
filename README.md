@@ -198,8 +198,12 @@ On this (edge) side, enable shipping in `<WORKING_DIR>/traces/config.json`:
 
 Local JSONL files stay the source of truth; shipping is batched,
 gzip'd, retried with a disk queue, and can never block the agent
-loop. Instance identity precedence: `remote_instance_id` config >
-`QWENPAW_INSTANCE_ID` env > persisted `traces/.instance-id`.
+loop. The disk queue (`.remote-queue.jsonl`) drains on its own —
+the flush tick retries it every 30 s even with no new events, and
+failures (e.g. an invalid token) surface in the connection log
+rather than failing silently. Instance identity precedence:
+`remote_instance_id` config > `QWENPAW_INSTANCE_ID` env >
+persisted `traces/.instance-id`.
 
 ### Fleet enrollment (many machines, zero per-host tokens)
 
