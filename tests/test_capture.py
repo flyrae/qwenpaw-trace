@@ -138,6 +138,28 @@ class TestRunHooks:
         assert events[1]["data"]["status"] == "success"
         assert "_agent_trace_run" not in hook_ctx.extras
 
+    async def test_start_carries_requester_user_id(
+        self, service, hook_ctx
+    ):
+        # Console sessions have no message/inbound; the requester's
+        # identity rides on run/start so central dashboards can
+        # attribute the session.
+        hook_ctx.request = SimpleNamespace(
+            channel="console", user_id="alice"
+        )
+        await AgentTraceRunStartHook().run(hook_ctx)
+        await AgentTraceFinalizeHook().run(hook_ctx)
+        events = await drained_events(service, "sess-1")
+        assert events[0]["data"]["user_id"] == "alice"
+
+    async def test_start_omits_blank_user_id(self, service, hook_ctx):
+        # The default fixture request has no user_id — the key must
+        # stay absent, not null.
+        await AgentTraceRunStartHook().run(hook_ctx)
+        await AgentTraceFinalizeHook().run(hook_ctx)
+        events = await drained_events(service, "sess-1")
+        assert "user_id" not in events[0]["data"]
+
     async def test_finalize_writes_terminal_event_once(
         self,
         service,

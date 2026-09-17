@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.2 (2026-09-17)
+
+- ``run/start`` now carries the requester's ``user_id`` (from
+  ``AgentRequest``) when present. Console sessions have no
+  ``message/inbound``, so this is the only way a central collector
+  can attribute them to a user — the server's session aggregate
+  (≥ v0.6.1) picks it up and the portal's user column stops showing
+  "—" for console chats. IM channels already provided the identity
+  via inbound messages; first identity wins.
+
 ## 0.8.1 (2026-09-16)
 
 - **Fix: the shipper's disk-spill queue no longer masquerades as a

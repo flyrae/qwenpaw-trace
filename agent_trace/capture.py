@@ -696,6 +696,7 @@ class AgentTraceRunStartHook(HookBase):
         trigger = _request_trigger(request)
         if not trigger and slash_skill:
             trigger = "skill_command"
+        user_id = str(getattr(request, "user_id", "") or "").strip()
         _safe_append(
             run,
             ev.EVENT_RUN_START,
@@ -705,6 +706,7 @@ class AgentTraceRunStartHook(HookBase):
                 "channel": run.channel,
                 "trigger": trigger,
                 "query": query_text,
+                **({"user_id": user_id} if user_id else {}),
                 **({"slash_skill": slash_skill} if slash_skill else {}),
                 "input_msgs_count": input_count,
                 "messages": _messages_digest(ctx.input_msgs),
