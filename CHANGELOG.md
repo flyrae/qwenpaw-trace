@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.3 (2026-09-17)
+
+- Widened the host-version constraint to ``qwenpaw_version >=2.0.0,
+  <2.3.0`` (covers 2.0.0 through 2.2.2 inclusive). Verified against
+  the QwenPaw tags: ``runtime/hooks.py``, ``runtime/phases.py``, and
+  ``schemas.py`` (AgentRequest) are byte-identical across
+  v2.0.0–v2.2.1; all seven PluginApi registration methods exist with
+  compatible signatures (``register_workspace_created_hook`` only
+  gained a defaulted ``reload_safe`` parameter); ``WORKING_DIR`` and
+  the Console host surface (``getApiUrl``) predate 2.0.0's tag. The
+  previous min of 2.1.0 was a conservative initial declaration, not
+  a known incompatibility. Note: the loader treats max as exclusive
+  (``>=min, <max``), hence 2.3.0 to include 2.2.2.
+
 ## 0.8.2 (2026-09-17)
 
 - ``run/start`` now carries the requester's ``user_id`` (from
