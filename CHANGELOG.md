@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.4 (2026-09-17)
+
+- **Fix: approval decide crashed with ``actor``** — the console
+  ``/approve`` and ``/deny`` endpoints call
+  ``ApprovalService.resolve_request(..., actor=...)`` (the logged-in
+  user deciding), but the capture wrapper's signature didn't accept
+  the keyword, so every console-side approval raised ``TypeError``
+  the moment the patch was active. The wrapper now forwards
+  ``actor`` (only when supplied, so hosts predating the parameter
+  keep working) and records it on the ``approval/decided`` event —
+  the trace now shows *who* decided, not just the decision.
+
 ## 0.8.3 (2026-09-17)
 
 - Widened the host-version constraint to ``qwenpaw_version >=2.0.0,

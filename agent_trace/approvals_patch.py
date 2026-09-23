@@ -219,14 +219,29 @@ def apply_approval_patch() -> None:
         request_id: str,
         decision: Any,
         scope: Any = None,
+        *,
+        actor: Any = None,
+        **kwargs: Any,
     ):
-        pending = await orig_resolve(self, request_id, decision, scope)
+        # The console approve/deny endpoints pass ``actor`` (the
+        # logged-in user deciding). Older hosts without the parameter
+        # must not see it, so forward only when supplied.
+        call_kwargs = dict(kwargs)
+        if actor is not None:
+            call_kwargs["actor"] = actor
+        pending = await orig_resolve(
+            self, request_id, decision, scope, **call_kwargs
+        )
         if state["active"] and pending is not None:
             try:
                 data = _pending_data(pending)
                 data["decision"] = _decision_name(decision)
                 if scope is not None:
                     data["scope"] = str(getattr(scope, "value", scope))
+                if actor is not None:
+                    data["actor"] = str(
+                        getattr(actor, "user_id", None) or actor
+                    )
                 _record(
                     getattr(pending, "session_id", None),
                     ev.EVENT_APPROVAL_DECIDED,

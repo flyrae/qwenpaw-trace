@@ -96,6 +96,59 @@ class TestApprovalPatch:
         # The original methods behave again (idempotent restore).
         assert ApprovalService.create_pending is not None
 
+    async def test_decided_with_actor_kwarg_forwarded_and_recorded(
+        self, service
+    ):
+        # The console /approve and /deny endpoints call
+        # resolve_request(..., actor=...). The wrapper must accept and
+        # forward the keyword (older hosts lack the parameter) and
+        # record who decided.
+        from qwenpaw.app.approvals.service import get_approval_service
+        from qwenpaw.security.tool_guard.approval import ApprovalDecision
+        from types import SimpleNamespace
+
+        apply_approval_patch()
+        try:
+            svc = get_approval_service()
+            pending = await self._create(svc)
+            actor = SimpleNamespace(user_id="admin@console")
+            resolved = await svc.resolve_request(
+                pending.request_id,
+                ApprovalDecision.APPROVED,
+                actor=actor,
+            )
+            assert resolved is not None
+            decided = _of_type(
+                await _drain(service, "sess-1"),
+                ev.EVENT_APPROVAL_DECIDED,
+            )
+            assert decided[0]["data"]["decision"] == "approved"
+            assert decided[0]["data"]["actor"] == "admin@console"
+        finally:
+            restore_approval_patch()
+
+    async def test_decided_without_actor_still_works(self, service):
+        # Old-host call shape (positional, no actor) keeps working.
+        from qwenpaw.app.approvals.service import get_approval_service
+        from qwenpaw.security.tool_guard.approval import ApprovalDecision
+
+        apply_approval_patch()
+        try:
+            svc = get_approval_service()
+            pending = await self._create(svc)
+            resolved = await svc.resolve_request(
+                pending.request_id, ApprovalDecision.DENIED
+            )
+            assert resolved is not None
+            decided = _of_type(
+                await _drain(service, "sess-1"),
+                ev.EVENT_APPROVAL_DECIDED,
+            )
+            assert decided[0]["data"]["decision"] == "denied"
+            assert "actor" not in decided[0]["data"]
+        finally:
+            restore_approval_patch()
+
     async def test_patch_disabled_by_config(self, service):
         service.config.capture_approvals = False
         from qwenpaw.app.approvals.service import get_approval_service
