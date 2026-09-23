@@ -22,6 +22,7 @@ non-LIFO order: restoring would strip their patch. Two safeguards:
 
 from __future__ import annotations
 
+import inspect
 import logging
 from collections import OrderedDict
 from typing import Any
@@ -30,6 +31,19 @@ from . import events as ev
 from .service import get_service
 
 logger = logging.getLogger("qwenpaw.plugins.agent_trace")
+
+
+def _accepts_keyword(function: Any, name: str) -> bool:
+    """Whether *function* can safely receive the named keyword."""
+    try:
+        parameters = inspect.signature(function).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in parameters or any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+
 
 # Ask-time run ids are needed only until the matching decision. The
 # GC eviction path removes pendings without any seam we can observe,
@@ -71,7 +85,7 @@ def _active_run_id(session_id: Any) -> str:
 def _run_id_for_decision(session_id: Any, request_id: str) -> str:
     """Ask-time run when known, else the currently active run."""
     return _asked_run_by_request.pop(request_id, None) or _active_run_id(
-        session_id
+        session_id,
     )
 
 
@@ -223,14 +237,18 @@ def apply_approval_patch() -> None:
         actor: Any = None,
         **kwargs: Any,
     ):
-        # The console approve/deny endpoints pass ``actor`` (the
-        # logged-in user deciding). Older hosts without the parameter
-        # must not see it, so forward only when supplied.
+        # The console approve/deny endpoints on newer hosts pass ``actor``
+        # (the logged-in user deciding). Older hosts lack the original
+        # parameter, so record it but forward it only when supported.
         call_kwargs = dict(kwargs)
-        if actor is not None:
+        if actor is not None and _accepts_keyword(orig_resolve, "actor"):
             call_kwargs["actor"] = actor
         pending = await orig_resolve(
-            self, request_id, decision, scope, **call_kwargs
+            self,
+            request_id,
+            decision,
+            scope,
+            **call_kwargs,
         )
         if state["active"] and pending is not None:
             try:
@@ -240,7 +258,7 @@ def apply_approval_patch() -> None:
                     data["scope"] = str(getattr(scope, "value", scope))
                 if actor is not None:
                     data["actor"] = str(
-                        getattr(actor, "user_id", None) or actor
+                        getattr(actor, "user_id", None) or actor,
                     )
                 _record(
                     getattr(pending, "session_id", None),

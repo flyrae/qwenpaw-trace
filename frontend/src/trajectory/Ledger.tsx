@@ -23,7 +23,7 @@ import { formatSeconds, formatTokens, recordKindLabel } from "./records";
 
 const host = window.QwenPaw.host;
 const React: typeof ReactNS = host.React;
-const { useRef } = React;
+const { useCallback, useRef } = React;
 const { Tag, Tooltip } = host.antd;
 const { Text } = host.antd.Typography;
 const {
@@ -84,7 +84,7 @@ const STATUS_LABELS: Record<string, { zh: string; en: string }> = {
 };
 
 /** Windowed rendering kicks in beyond this many rows. */
-const VIRTUALIZE_THRESHOLD = 150;
+const VIRTUALIZE_THRESHOLD = 80;
 const ROW_HEIGHT = 26;
 const BOUNDARY_HEIGHT = 34;
 const DIVIDER_HEIGHT = 9;
@@ -156,19 +156,19 @@ export interface LedgerProps {
   onSkillSpanOpen?: (skill: string, turn: number | null) => void;
 }
 
-function RecordRow({
+const RecordRow = React.memo(function RecordRow({
   record,
   selected,
   dimmed,
   multiRequest,
-  onSelect,
+  onSelectRecord,
   onOpenRun,
 }: {
   record: TrajectoryRecord;
   selected: boolean;
   dimmed: boolean;
   multiRequest: boolean;
-  onSelect: () => void;
+  onSelectRecord: (index: number) => void;
   onOpenRun?: (runIndex: number) => void;
 }) {
   const usage = record.usage;
@@ -212,7 +212,7 @@ function RecordRow({
       data-running={record.running || undefined}
       data-selected={selected || undefined}
       data-dimmed={dimmed || undefined}
-      onClick={onSelect}
+      onClick={() => onSelectRecord(record.index)}
       style={{
         display: "flex",
         alignItems: "center",
@@ -464,23 +464,23 @@ function RecordRow({
       </span>
     </div>
   );
-}
+});
 
-function BoundaryRow({
+const BoundaryRow = React.memo(function BoundaryRow({
   turn,
   collapsed,
   selected,
   cellCount,
-  onToggle,
-  onSelect,
+  onToggleTurn,
+  onSelectTurn,
   onSkillSpanOpen,
 }: {
   turn: TrajectoryTurnModel;
   collapsed: boolean;
   selected: boolean;
   cellCount: number;
-  onToggle: () => void;
-  onSelect: () => void;
+  onToggleTurn: (turn: number) => void;
+  onSelectTurn: (turn: number) => void;
   onSkillSpanOpen?: (skill: string, turn: number | null) => void;
 }) {
   const locale = storedLocale();
@@ -491,7 +491,7 @@ function BoundaryRow({
       <span
         onClick={(event: ReactNS.MouseEvent<HTMLSpanElement>) => {
           event.stopPropagation();
-          onSelect();
+          if (turn.turn !== null) onSelectTurn(turn.turn);
         }}
         style={{
           display: "inline-flex",
@@ -511,7 +511,7 @@ function BoundaryRow({
         <CaretRightOutlined
           onClick={(event: ReactNS.MouseEvent<HTMLSpanElement>) => {
             event.stopPropagation();
-            onToggle();
+            if (turn.turn !== null) onToggleTurn(turn.turn);
           }}
           style={{
             fontSize: 10,
@@ -570,7 +570,7 @@ function BoundaryRow({
       </span>
     </div>
   );
-}
+});
 
 /** The trajectory ledger with windowed rendering for long sessions. */
 export function Ledger({
@@ -593,7 +593,10 @@ export function Ledger({
 }: LedgerProps) {
   const locale = storedLocale();
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const visibleTurns = turns.filter((turn) => turn.turn !== null);
+  const visibleTurns = React.useMemo(
+    () => turns.filter((turn) => turn.turn !== null),
+    [turns],
+  );
   const multiRequest = visibleTurns.length > 1;
 
   const rows = React.useMemo<LedgerRowModel[]>(() => {
@@ -662,87 +665,98 @@ export function Ledger({
     [focusIndexes, searchMatchIndexes],
   );
 
-  const renderRow = (row: LedgerRowModel): ReactNS.ReactNode => {
-    switch (row.type) {
-      case "load-older":
-        return (
-          <div style={{ textAlign: "center", height: LOAD_OLDER_HEIGHT }}>
-            <button
-              type="button"
-              onClick={onLoadOlder}
-              disabled={loadingOlder}
+  const renderRow = useCallback(
+    (row: LedgerRowModel): ReactNS.ReactNode => {
+      switch (row.type) {
+        case "load-older":
+          return (
+            <div style={{ textAlign: "center", height: LOAD_OLDER_HEIGHT }}>
+              <button
+                type="button"
+                onClick={onLoadOlder}
+                disabled={loadingOlder}
+                style={{
+                  border: "1px solid rgba(128,128,128,0.3)",
+                  borderRadius: 10,
+                  background: "transparent",
+                  padding: "1px 12px",
+                  fontSize: 11,
+                  cursor: loadingOlder ? "default" : "pointer",
+                  color: "rgba(128,128,128,1)",
+                }}
+              >
+                {loadingOlder ? "…" : `⋯ ${t(locale, "loadOlder")}`}
+              </button>
+            </div>
+          );
+        case "divider":
+          return (
+            <div
               style={{
-                border: "1px solid rgba(128,128,128,0.3)",
-                borderRadius: 10,
-                background: "transparent",
-                padding: "1px 12px",
-                fontSize: 11,
-                cursor: loadingOlder ? "default" : "pointer",
-                color: "rgba(128,128,128,1)",
+                height: DIVIDER_HEIGHT,
+                borderBottom: "1px dashed rgba(128,128,128,0.25)",
               }}
-            >
-              {loadingOlder ? "…" : `⋯ ${t(locale, "loadOlder")}`}
-            </button>
-          </div>
-        );
-      case "divider":
-        return (
-          <div
-            style={{
-              height: DIVIDER_HEIGHT,
-              borderBottom: "1px dashed rgba(128,128,128,0.25)",
-            }}
-          />
-        );
-      case "initial": {
-        const record = row.record as TrajectoryRecord;
-        return (
-          <RecordRow
-            record={record}
-            selected={selectedIndex === record.index}
-            dimmed={dimFor(record)}
-            multiRequest={multiRequest}
-            onSelect={() => onSelectedIndexChange(record.index)}
-            onOpenRun={onSelectedTurnChange}
-          />
-        );
+            />
+          );
+        case "initial": {
+          const record = row.record as TrajectoryRecord;
+          return (
+            <RecordRow
+              record={record}
+              selected={selectedIndex === record.index}
+              dimmed={dimFor(record)}
+              multiRequest={multiRequest}
+              onSelectRecord={onSelectedIndexChange}
+              onOpenRun={onSelectedTurnChange}
+            />
+          );
+        }
+        case "boundary": {
+          const turn = row.turn as TrajectoryTurnModel;
+          const turnNumber = turn.turn as number;
+          return (
+            <BoundaryRow
+              turn={turn}
+              collapsed={collapsedTurns.has(turnNumber)}
+              selected={selectedTurn === turnNumber}
+              cellCount={turn.groups[0]?.cells.length ?? 0}
+              onToggleTurn={onToggleTurn}
+              onSelectTurn={onSelectedTurnChange}
+              onSkillSpanOpen={onSkillSpanOpen}
+            />
+          );
+        }
+        case "record":
+        default: {
+          const record = row.record as TrajectoryRecord;
+          return (
+            <RecordRow
+              record={record}
+              selected={selectedIndex === record.index}
+              dimmed={dimFor(record)}
+              multiRequest={multiRequest}
+              onSelectRecord={onSelectedIndexChange}
+              onOpenRun={onSelectedTurnChange}
+            />
+          );
+        }
       }
-      case "boundary": {
-        const turn = row.turn as TrajectoryTurnModel;
-        const turnNumber = turn.turn as number;
-        return (
-          <BoundaryRow
-            turn={turn}
-            collapsed={collapsedTurns.has(turnNumber)}
-            selected={selectedTurn === turnNumber}
-            cellCount={turn.groups[0]?.cells.length ?? 0}
-            onToggle={() => onToggleTurn(turnNumber)}
-            onSelect={() => onSelectedTurnChange(turnNumber)}
-            onSkillSpanOpen={
-              onSkillSpanOpen
-                ? (skill: string, turnNo: number | null) =>
-                    onSkillSpanOpen(skill, turnNo)
-                : undefined
-            }
-          />
-        );
-      }
-      case "record":
-      default: {
-        const record = row.record as TrajectoryRecord;
-        return (
-          <RecordRow
-            record={record}
-            selected={selectedIndex === record.index}
-            dimmed={dimFor(record)}
-            multiRequest={multiRequest}
-            onSelect={() => onSelectedIndexChange(record.index)}
-            onOpenRun={onSelectedTurnChange}
-          />
-        );
-      }
-    }
-  };
+    },
+    [
+      collapsedTurns,
+      dimFor,
+      loadingOlder,
+      locale,
+      multiRequest,
+      onLoadOlder,
+      onSelectedIndexChange,
+      onSelectedTurnChange,
+      onSkillSpanOpen,
+      onToggleTurn,
+      selectedIndex,
+      selectedTurn,
+    ],
+  );
 
   if (rows.length === 0) {
     return (

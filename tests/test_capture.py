@@ -139,13 +139,16 @@ class TestRunHooks:
         assert "_agent_trace_run" not in hook_ctx.extras
 
     async def test_start_carries_requester_user_id(
-        self, service, hook_ctx
+        self,
+        service,
+        hook_ctx,
     ):
         # Console sessions have no message/inbound; the requester's
         # identity rides on run/start so central dashboards can
         # attribute the session.
         hook_ctx.request = SimpleNamespace(
-            channel="console", user_id="alice"
+            channel="console",
+            user_id="alice",
         )
         await AgentTraceRunStartHook().run(hook_ctx)
         await AgentTraceFinalizeHook().run(hook_ctx)
@@ -647,7 +650,11 @@ class TestModelCall:
         hook_ctx.input_msgs = [
             SimpleNamespace(
                 role="user",
-                content="/xlsx open this excel\n\n<skill>\n<name>xlsx</name>\n<description>Sheets.</description>\n</skill>\n",
+                content=(
+                    "/xlsx open this excel\n\n<skill>\n"
+                    "<name>xlsx</name>\n"
+                    "<description>Sheets.</description>\n</skill>\n"
+                ),
             ),
         ]
         await AgentTraceRunStartHook().run(hook_ctx)

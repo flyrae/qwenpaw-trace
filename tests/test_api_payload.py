@@ -75,7 +75,7 @@ class TestSafeExtract:
         from agent_trace.api_payload_patch import _extract_usage
 
         usage = _extract_usage(
-            {"usage": {"prompt_tokens": 50, "completion_tokens": 10}}
+            {"usage": {"prompt_tokens": 50, "completion_tokens": 10}},
         )
         assert usage["input_tokens"] == 50
         assert usage["output_tokens"] == 10
@@ -137,7 +137,10 @@ class TestRecordApiEvent:
 
         await AgentTraceRunStartHook().run(hook_ctx)
         _record_api_event(
-            "response", "m", error="Connection timeout", duration_ms=5000
+            "response",
+            "m",
+            error="Connection timeout",
+            duration_ms=5000,
         )
         await AgentTraceFinalizeHook().run(hook_ctx)
 
@@ -186,7 +189,8 @@ class TestPatchLifecycle:
         from agent_trace.api_payload_patch import _resolve_target
 
         create = _resolve_target(
-            "openai.resources.chat.completions", "Completions.create"
+            "openai.resources.chat.completions",
+            "Completions.create",
         )
         assert callable(create)
 
@@ -234,7 +238,10 @@ class TestPatchLifecycle:
         from agent_trace import api_payload_patch
 
         api_payload_patch._active = False
-        with caplog.at_level(logging.WARNING, logger="qwenpaw.plugins.agent_trace"):
+        with caplog.at_level(
+            logging.WARNING,
+            logger="qwenpaw.plugins.agent_trace",
+        ):
             api_payload_patch.apply_api_payload_patch()
         try:
             assert not [
@@ -242,10 +249,12 @@ class TestPatchLifecycle:
             ], caplog.text
             # wrapt attaches a BoundFunctionWrapper exposing __wrapped__
             assert hasattr(
-                completions_mod.Completions.create, "__wrapped__"
+                completions_mod.Completions.create,
+                "__wrapped__",
             )
             assert hasattr(
-                completions_mod.AsyncCompletions.create, "__wrapped__"
+                completions_mod.AsyncCompletions.create,
+                "__wrapped__",
             )
         finally:
             api_payload_patch.restore_api_payload_patch()
@@ -253,7 +262,9 @@ class TestPatchLifecycle:
 
 class TestWrapperCapture:
     async def test_async_wrapper_captures_kwargs_call(
-        self, service, hook_ctx
+        self,
+        service,
+        hook_ctx,
     ):
         """Regression: create() is invoked with KEYWORD arguments by the
         SDK; the wrapper must merge them (an earlier version dropped
@@ -271,7 +282,10 @@ class TestWrapperCapture:
                 return _make_fake_response()
 
             result = await api_payload_patch._async_create_wrapper(
-                fake_create, None, (), _make_record_kwargs()
+                fake_create,
+                None,
+                (),
+                _make_record_kwargs(),
             )
             assert result.id == "chatcmpl-test"
         finally:
@@ -280,9 +294,7 @@ class TestWrapperCapture:
 
         await AgentTraceFinalizeHook().run(hook_ctx)
         events = await drained_events(service, "sess-1")
-        req = [
-            e for e in events if e["type"] == "llm/api_request"
-        ]
+        req = [e for e in events if e["type"] == "llm/api_request"]
         assert len(req) == 1
         data = req[0]["data"]
         assert data["model"] == "test-model"
@@ -291,7 +303,8 @@ class TestWrapperCapture:
         assert data["params"]["temperature"] == 0.7
 
     async def test_tee_stream_proxies_attributes_and_settles_once(
-        self, service
+        self,
+        service,
     ):
         from agent_trace import api_payload_patch
 

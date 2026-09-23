@@ -5,6 +5,7 @@ import pytest
 
 from agent_trace import events as ev
 from agent_trace.approvals_patch import (
+    _accepts_keyword,
     apply_approval_patch,
     restore_approval_patch,
 )
@@ -25,6 +26,21 @@ async def _drain(service, session_id):
 
 def _of_type(events, event_type):
     return [e for e in events if e["type"] == event_type]
+
+
+def test_accepts_keyword_detects_explicit_and_variadic_support():
+    def old_host(request_id):
+        del request_id
+
+    def new_host(request_id, *, actor=None):
+        del request_id, actor
+
+    def wrapped_host(request_id, **kwargs):
+        del request_id, kwargs
+
+    assert not _accepts_keyword(old_host, "actor")
+    assert _accepts_keyword(new_host, "actor")
+    assert _accepts_keyword(wrapped_host, "actor")
 
 
 class TestApprovalPatch:
@@ -96,13 +112,14 @@ class TestApprovalPatch:
         # The original methods behave again (idempotent restore).
         assert ApprovalService.create_pending is not None
 
-    async def test_decided_with_actor_kwarg_forwarded_and_recorded(
-        self, service
+    async def test_decided_with_actor_kwarg_accepted_and_recorded(
+        self,
+        service,
     ):
         # The console /approve and /deny endpoints call
         # resolve_request(..., actor=...). The wrapper must accept and
-        # forward the keyword (older hosts lack the parameter) and
-        # record who decided.
+        # record the keyword. It forwards actor only when the host's
+        # original method supports it.
         from qwenpaw.app.approvals.service import get_approval_service
         from qwenpaw.security.tool_guard.approval import ApprovalDecision
         from types import SimpleNamespace
@@ -137,7 +154,8 @@ class TestApprovalPatch:
             svc = get_approval_service()
             pending = await self._create(svc)
             resolved = await svc.resolve_request(
-                pending.request_id, ApprovalDecision.DENIED
+                pending.request_id,
+                ApprovalDecision.DENIED,
             )
             assert resolved is not None
             decided = _of_type(

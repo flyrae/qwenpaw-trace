@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.8.5 (2026-09-23)
+
+Ported back from the QwenPaw fork-main integration (PR flyrae/QwenPaw#1)
+plus alignment:
+
+- **Frontend performance:** ledger rows are memoized (selecting a row
+  no longer rebuilds the table) and virtualization kicks in from 80
+  rows (was 150). Live polling merges events by ``seq`` instead of
+  replacing the window, so "load older" history and the current
+  selection survive a running turn; stale fetches after a session
+  switch are ignored. Session search is debounced and sent as ``q``;
+  the session-list poll keeps already-loaded pages (≤500). Event
+  search matches a precomputed haystack instead of re-stringifying
+  every record per keystroke.
+- ``GET /agent-trace/sessions`` (local read API) accepts ``q``,
+  matching session id, title, agent, channel, user, instance, and
+  hostname — the Console-side counterpart of the portal's search.
+- Approval decide: ``actor`` forwarding is gated on the host's
+  original ``resolve_request`` signature (``inspect``), so an older
+  host never receives the unsupported keyword while the actor is
+  still recorded on ``approval/decided``.
+
 ## 0.8.4 (2026-09-17)
 
 - **Fix: approval decide crashed with ``actor``** — the console

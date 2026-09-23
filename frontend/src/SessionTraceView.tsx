@@ -14,6 +14,7 @@ import {
   fetchConfig,
   fetchSessionEvents,
   fetchSessionStats,
+  mergeSessionDetail,
   parseSessionRef,
   updateConfig,
   type SessionDetail,
@@ -49,6 +50,47 @@ import {
   statusText,
   STATUS_COLORS,
 } from "./uiShared";
+
+/** Fields the inspector can show — used as the AND-search haystack. */
+function recordHaystack(record: TrajectoryRecord): string {
+  return [
+    record.text,
+    record.outputText,
+    record.thinkingText,
+    record.toolName,
+    record.toolInput,
+    record.toolOutput,
+    record.toolError,
+    record.model,
+    record.provider,
+    record.marker,
+    record.skillName,
+    record.inSkill,
+    record.guidedSkill,
+    record.channel,
+    record.messages
+      ?.map((message) => `${message.role} ${message.text}`)
+      .join("\n"),
+    record.inputNew
+      ?.map((message) => `${message.role} ${message.text ?? ""}`)
+      .join("\n"),
+    record.apiPayload
+      ? [
+          record.apiPayload.model,
+          ...record.apiPayload.messages.map(
+            (message) => `${message.role} ${message.content}`,
+          ),
+        ].join("\n")
+      : "",
+    record.options ? JSON.stringify(record.options) : "",
+    record.toolSchema ? JSON.stringify(record.toolSchema) : "",
+    record.headerTools?.join(" "),
+    record.prompt ?? "",
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+}
 
 const host = window.QwenPaw.host;
 const React: typeof ReactNS = host.React;
@@ -159,6 +201,7 @@ export function SessionTraceView({
   const [detailLoading, setDetailLoading] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [eventSearch, setEventSearch] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [mode, setMode] = useState<TrajectoryTimelineMode>("sequence");
   const [range, setRange] = useState<TrajectoryTimeRange | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
@@ -190,43 +233,37 @@ export function SessionTraceView({
       .catch(() => setConfig(null));
   }, []);
 
-  const loadDetail = useCallback(
-    async (target: string, beforeSeq?: number) => {
-      if (!beforeSeq) setDetailLoading(true);
-      try {
-        // Central-mode refs carry the instance: <instance>~<session>.
-        const { sessionId, instance } = parseSessionRef(target);
-        const body = await fetchSessionEvents(sessionId, {
-          beforeSeq,
-          limit: 200,
-          instance,
-        });
-        setError(null);
-        setDetail((prev) => {
-          if (beforeSeq && prev) {
-            return {
-              ...body,
-              events: [...body.events, ...prev.events],
-            };
-          }
-          return body;
-        });
-      } catch (exc) {
-        setError({
-          message: String((exc as Error).message),
-          status: exc instanceof ApiError ? exc.status : null,
-        });
-      } finally {
-        if (!beforeSeq) setDetailLoading(false);
+  const loadDetail = useCallback(async (target: string, beforeSeq?: number) => {
+    if (!beforeSeq) setDetailLoading(true);
+    try {
+      // Central-mode refs carry the instance: <instance>~<session>.
+      const { sessionId, instance } = parseSessionRef(target);
+      const body = await fetchSessionEvents(sessionId, {
+        beforeSeq,
+        limit: 200,
+        instance,
+      });
+      if (sessionIdRef.current !== target) return;
+      setError(null);
+      setDetail((prev) => mergeSessionDetail(prev, body));
+    } catch (exc) {
+      if (sessionIdRef.current !== target) return;
+      setError({
+        message: String((exc as Error).message),
+        status: exc instanceof ApiError ? exc.status : null,
+      });
+    } finally {
+      if (sessionIdRef.current === target && !beforeSeq) {
+        setDetailLoading(false);
       }
-    },
-    [],
-  );
+    }
+  }, []);
 
   const loadStats = useCallback(async (target: string) => {
     try {
       const { sessionId, instance } = parseSessionRef(target);
       const stats = await fetchSessionStats(sessionId, instance);
+      if (sessionIdRef.current !== target) return;
       setSessionStats(stats);
       setSessionTotals({
         sessionId: target,
@@ -236,6 +273,7 @@ export function SessionTraceView({
         reasoningTokens: Number(stats.reasoning_tokens ?? 0),
       });
     } catch {
+      if (sessionIdRef.current !== target) return;
       setSessionStats(null);
       setSessionTotals(null);
     }
@@ -248,6 +286,9 @@ export function SessionTraceView({
       setSelectedTurn(null);
       setCollapsedTurns(new Set());
       setEventSearch("");
+      setSearchQuery("");
+      setDetail(null);
+      setError(null);
       void loadDetail(sessionId);
       void loadStats(sessionId);
     } else {
@@ -256,6 +297,11 @@ export function SessionTraceView({
       setSessionTotals(null);
     }
   }, [sessionId, loadDetail, loadStats]);
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => setSearchQuery(eventSearch), 180);
+    return () => window.clearTimeout(handle);
+  }, [eventSearch]);
 
   const allTurns = useMemo(
     () => (detail ? buildTurns(detail.events) : []),
@@ -298,60 +344,24 @@ export function SessionTraceView({
     [range, turns, mode],
   );
 
+  const recordHaystacks = useMemo(
+    () =>
+      records.map((record) => ({
+        index: record.index,
+        haystack: recordHaystack(record),
+      })),
+    [records],
+  );
+
   const searchMatchIndexes = useMemo(() => {
-    const terms = eventSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const terms = searchQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (terms.length === 0) return null;
-    // dsh parity: AND across terms, over every field the inspector can
-    // show — record summaries, tool args/results, thinking, input
-    // messages (middleware deltas), wire-level API payload, options,
-    // skill attribution, and prompt-snapshot tool names.
-    const haystackOf = (record: TrajectoryRecord): string =>
-      [
-        record.text,
-        record.outputText,
-        record.thinkingText,
-        record.toolName,
-        record.toolInput,
-        record.toolOutput,
-        record.toolError,
-        record.model,
-        record.provider,
-        record.marker,
-        record.skillName,
-        record.inSkill,
-        record.guidedSkill,
-        record.channel,
-        record.messages
-          ?.map((message) => `${message.role} ${message.text}`)
-          .join("\n"),
-        record.inputNew
-          ?.map((message) => `${message.role} ${message.text ?? ""}`)
-          .join("\n"),
-        record.apiPayload
-          ? [
-              record.apiPayload.model,
-              ...record.apiPayload.messages.map(
-                (message) => `${message.role} ${message.content}`,
-              ),
-            ].join("\n")
-          : "",
-        record.options ? JSON.stringify(record.options) : "",
-        record.toolSchema ? JSON.stringify(record.toolSchema) : "",
-        record.headerTools?.join(" "),
-        record.prompt ?? "",
-      ]
-        .filter(Boolean)
-        .join("\n")
-        .toLowerCase();
     return new Set(
-      records
-        .filter((record) => {
-          const haystack = haystackOf(record);
-          return terms.every((term) => haystack.includes(term));
-        })
-        .map((record) => record.index),
+      recordHaystacks
+        .filter((entry) => terms.every((term) => entry.haystack.includes(term)))
+        .map((entry) => entry.index),
     );
-  }, [eventSearch, records]);
+  }, [searchQuery, recordHaystacks]);
 
   const selectedRecord = useMemo(
     () =>
@@ -676,10 +686,7 @@ export function SessionTraceView({
                       onClick={() => {
                         const { sessionId: rawId, instance } =
                           parseSessionRef(sessionId);
-                        void exportSessionFile(
-                          rawId,
-                          instance,
-                        )
+                        void exportSessionFile(rawId, instance)
                           .then(() => message.success(t(locale, "exported")))
                           .catch((exc: Error) =>
                             message.error(String(exc.message)),

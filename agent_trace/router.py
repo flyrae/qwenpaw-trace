@@ -15,6 +15,23 @@ from .store import valid_session_id
 
 logger = logging.getLogger("qwenpaw.plugins.agent_trace")
 
+_SESSION_SEARCH_FIELDS = (
+    "session_id",
+    "title",
+    "agent_id",
+    "channel",
+    "user_id",
+    "instance_id",
+    "hostname",
+)
+
+
+def _session_matches(summary: Dict[str, Any], needle: str) -> bool:
+    haystack = " ".join(
+        str(summary.get(field) or "") for field in _SESSION_SEARCH_FIELDS
+    ).lower()
+    return needle in haystack
+
 
 def _require_service():
     service = get_service()
@@ -57,11 +74,19 @@ def build_router() -> APIRouter:
     async def list_sessions(
         limit: int = Query(default=100, ge=1, le=500),
         offset: int = Query(default=0, ge=0),
+        q: Optional[str] = Query(default=None),
     ) -> Dict[str, Any]:
         service = _require_service()
         sessions = await asyncio.to_thread(
             service.list_sessions_with_titles,
         )
+        needle = (q or "").strip().lower()
+        if needle:
+            sessions = [
+                summary
+                for summary in sessions
+                if _session_matches(summary, needle)
+            ]
         window = sessions[offset : offset + limit]
         return {
             "sessions": window,

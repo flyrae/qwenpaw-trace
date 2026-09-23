@@ -81,7 +81,8 @@ class TestAppendRead:
         )
         await store.flush()
         lines = (
-            (tmp_path / "sess-1.jsonl").read_text(encoding="utf-8")
+            (tmp_path / "sess-1.jsonl")
+            .read_text(encoding="utf-8")
             .strip()
             .splitlines()
         )
@@ -198,7 +199,7 @@ class TestListSessions:
                     "type": "session",
                     "run_id": "",
                     "data": {"query": "hi"},
-                }
+                },
             )
             + "\n",
             encoding="utf-8",
@@ -249,26 +250,41 @@ class TestStatsAndLineage:
             {},
             header={"session_id": "s", "agent_id": "main"},
         )
-        store.append("s", "llm/result", "r1", {
-            "model": "m1",
-            "duration_ms": 100.0,
-            "usage": {
-                "input_tokens": 10,
-                "output_tokens": 5,
-                "cache_input_tokens": 3,
-                "cache_creation_input_tokens": 2,
+        store.append(
+            "s",
+            "llm/result",
+            "r1",
+            {
+                "model": "m1",
+                "duration_ms": 100.0,
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "cache_input_tokens": 3,
+                    "cache_creation_input_tokens": 2,
+                },
+                "timing": {"ttft_ms": 20.0, "decode_ms": 80.0},
             },
-            "timing": {"ttft_ms": 20.0, "decode_ms": 80.0},
-        })
-        store.append("s", "tool/result", "r1", {
-            "ok": True,
-            "duration_ms": 50.0,
-        })
-        store.append("s", "tool/result", "r1", {
-            "ok": False,
-            "duration_ms": 5.0,
-            "error": "boom",
-        })
+        )
+        store.append(
+            "s",
+            "tool/result",
+            "r1",
+            {
+                "ok": True,
+                "duration_ms": 50.0,
+            },
+        )
+        store.append(
+            "s",
+            "tool/result",
+            "r1",
+            {
+                "ok": False,
+                "duration_ms": 5.0,
+                "error": "boom",
+            },
+        )
         store.append("s", "run/end", "r1", {"status": "error"})
         await store.flush()
         stats = store.compute_stats("s")

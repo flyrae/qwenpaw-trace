@@ -57,11 +57,7 @@ class _Ingest:
                 "payload": json.loads(gzip.decompress(body)),
             },
         )
-        return (
-            self.statuses.pop(0)
-            if self.statuses
-            else 200
-        )
+        return self.statuses.pop(0) if self.statuses else 200
 
 
 class _Enroll:
@@ -103,19 +99,19 @@ class TestEnroll:
         assert call["payload"]["instance_id"] == shipper._instance
         assert call["payload"]["hostname"]
         # The enrolled token — not the bootstrap key — reaches /ingest.
-        assert (
-            ingest.posts[0]["headers"]["Authorization"]
-            == "Bearer tok-e1"
-        )
+        assert ingest.posts[0]["headers"]["Authorization"] == "Bearer tok-e1"
         persisted = (
-            tmp_path / INSTANCE_TOKEN_FILENAME
-        ).read_text(encoding="utf-8").strip()
+            (tmp_path / INSTANCE_TOKEN_FILENAME)
+            .read_text(encoding="utf-8")
+            .strip()
+        )
         assert persisted == "tok-e1"
         assert shipper.stats["token_source"] == "enrolled"
 
     async def test_persisted_token_skips_enroll(self, tmp_path):
         (tmp_path / INSTANCE_TOKEN_FILENAME).write_text(
-            "tok-kept", encoding="utf-8"
+            "tok-kept",
+            encoding="utf-8",
         )
         config = _config(remote_enroll_key="enroll_k1")
         shipper = TraceShipper(tmp_path, config)
@@ -127,17 +123,16 @@ class TestEnroll:
         await shipper.stop()
 
         assert enroll.calls == []  # no re-enroll on restart
-        assert (
-            ingest.posts[0]["headers"]["Authorization"]
-            == "Bearer tok-kept"
-        )
+        assert ingest.posts[0]["headers"]["Authorization"] == "Bearer tok-kept"
 
     async def test_enrolled_token_beats_manual_token(self, tmp_path):
         (tmp_path / INSTANCE_TOKEN_FILENAME).write_text(
-            "tok-enrolled", encoding="utf-8"
+            "tok-enrolled",
+            encoding="utf-8",
         )
         config = _config(
-            remote_token="manual", remote_enroll_key="enroll_k1"
+            remote_token="manual",
+            remote_enroll_key="enroll_k1",
         )
         shipper = TraceShipper(tmp_path, config)
         ingest = _Ingest()
@@ -150,10 +145,12 @@ class TestEnroll:
         )
 
     async def test_enroll_rejected_falls_back_to_manual(
-        self, tmp_path
+        self,
+        tmp_path,
     ):
         config = _config(
-            remote_token="manual", remote_enroll_key="enroll_bad"
+            remote_token="manual",
+            remote_enroll_key="enroll_bad",
         )
         shipper = TraceShipper(tmp_path, config)
         ingest = _Ingest()
@@ -164,10 +161,7 @@ class TestEnroll:
         await shipper.stop()
 
         assert len(enroll.calls) == 1
-        assert (
-            ingest.posts[0]["headers"]["Authorization"]
-            == "Bearer manual"
-        )
+        assert ingest.posts[0]["headers"]["Authorization"] == "Bearer manual"
         # Throttled: a second flush does not hammer /enroll.
         shipper.enqueue("sess-1", _event(2))
         await asyncio.sleep(0.05)
@@ -176,7 +170,8 @@ class TestEnroll:
 
     async def test_ingest_401_rotates_via_reenroll(self, tmp_path):
         (tmp_path / INSTANCE_TOKEN_FILENAME).write_text(
-            "tok-stale", encoding="utf-8"
+            "tok-stale",
+            encoding="utf-8",
         )
         config = _config(remote_enroll_key="enroll_k1")
         shipper = TraceShipper(tmp_path, config)
@@ -191,20 +186,19 @@ class TestEnroll:
         assert len(enroll.calls) == 1  # rotation happened
         assert len(ingest.posts) == 2  # 401 then retried
         assert (
-            ingest.posts[0]["headers"]["Authorization"]
-            == "Bearer tok-stale"
+            ingest.posts[0]["headers"]["Authorization"] == "Bearer tok-stale"
         )
         assert (
-            ingest.posts[1]["headers"]["Authorization"]
-            == "Bearer tok-fresh"
+            ingest.posts[1]["headers"]["Authorization"] == "Bearer tok-fresh"
         )
         assert shipper.stats["shipped"] == 1
-        assert (
-            tmp_path / INSTANCE_TOKEN_FILENAME
-        ).read_text(encoding="utf-8").strip() == "tok-fresh"
+        assert (tmp_path / INSTANCE_TOKEN_FILENAME).read_text(
+            encoding="utf-8",
+        ).strip() == "tok-fresh"
 
     async def test_401_without_enroll_key_fails_normally(
-        self, tmp_path
+        self,
+        tmp_path,
     ):
         config = _config(remote_token="manual")
         shipper = TraceShipper(tmp_path, config)

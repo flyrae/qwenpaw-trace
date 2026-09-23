@@ -70,9 +70,7 @@ class TestInstanceIdentity:
         assert resolve_instance_id(tmp_path) == first
 
     def test_configured_wins(self, tmp_path):
-        assert (
-            resolve_instance_id(tmp_path, "prod-7") == "prod-7"
-        )
+        assert resolve_instance_id(tmp_path, "prod-7") == "prod-7"
 
     def test_env_var_used_when_config_empty(self, tmp_path, monkeypatch):
         monkeypatch.setenv("QWENPAW_INSTANCE_ID", "pod-abc-123")
@@ -147,7 +145,8 @@ class TestShipper:
         assert shipper.stats["spilled"] == 1
 
     async def test_idle_drain_retries_spill_without_new_events(
-        self, tmp_path
+        self,
+        tmp_path,
     ):
         # A spill left behind (e.g. the collector was down) must not
         # wait for the next session: the flush tick drains it alone.
@@ -157,7 +156,8 @@ class TestShipper:
             encoding="utf-8",
         )
         shipper = TraceShipper(
-            tmp_path, _config(remote_flush_interval_s=0.05)
+            tmp_path,
+            _config(remote_flush_interval_s=0.05),
         )
         transport = _Transport()
         shipper._http_post = transport  # pylint: disable=protected-access
@@ -177,7 +177,8 @@ class TestShipper:
             encoding="utf-8",
         )
         shipper = TraceShipper(
-            tmp_path, _config(remote_flush_interval_s=0.05)
+            tmp_path,
+            _config(remote_flush_interval_s=0.05),
         )
         transport = _Transport()
         transport.fail_next = 999  # every post fails
@@ -227,7 +228,7 @@ class TestStoreWiring:
                 {
                     "remote_enabled": True,
                     "remote_url": "http://collector.local",
-                }
+                },
             ),
             encoding="utf-8",
         )
@@ -261,7 +262,7 @@ class TestConnectionLogging:
         class _Capture(logging.Handler):
             def emit(self, record):
                 messages.append(
-                    (record.levelname, record.getMessage())
+                    (record.levelname, record.getMessage()),
                 )
 
         capture = _Capture(level=logging.INFO)
@@ -342,9 +343,11 @@ class TestEnvOverrides:
 
         if file_body is not None:
             (tmp_path / "config.json").write_text(
-                _json.dumps(file_body), encoding="utf-8"
+                _json.dumps(file_body),
+                encoding="utf-8",
             )
         import os
+
         for key, value in env.items():
             os.environ[key] = value
         try:
@@ -365,7 +368,8 @@ class TestEnvOverrides:
 
     def test_file_used_when_env_unset(self, tmp_path):
         config = self._load_with(
-            tmp_path, {"remote_url": "http://from-file:1"}
+            tmp_path,
+            {"remote_url": "http://from-file:1"},
         )
         assert config.remote_url == "http://from-file:1"
 
@@ -395,6 +399,8 @@ class TestEnvOverrides:
 
     def test_unknown_prefix_ignored(self, tmp_path):
         config = self._load_with(
-            tmp_path, None, AGENT_TRACE_NO_SUCH_FIELD="1"
+            tmp_path,
+            None,
+            AGENT_TRACE_NO_SUCH_FIELD="1",
         )
         assert config.enabled is True
